@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: kontur
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn kontur_edo.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: KONTUR_BASE_URL
+        value: https://diadoc-api.kontur.ru
+      - key: KONTUR_API_KEY
+        sync: false
+      - key: KONTUR_CLIENT_ID
+        sync: false
+      - key: KONTUR_CLIENT_SECRET
+        sync: false
+
