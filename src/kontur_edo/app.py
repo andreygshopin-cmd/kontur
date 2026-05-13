@@ -199,6 +199,20 @@ def index() -> str:
       `;
     }
 
+    async function renderConfigHint() {
+      const response = await fetch("/api/config");
+      const config = await response.json();
+      if (contentNode.dataset.touched === "true") return;
+      contentNode.innerHTML = `
+        <div class="details">
+          <div class="label">Redirect URI</div>
+          <div><code>${escapeHtml(config.redirect_uri || "")}</code></div>
+          <div class="label">Scope</div>
+          <div><code>${escapeHtml(config.scope || "")}</code></div>
+        </div>
+      `;
+    }
+
     async function refreshAuthStatus() {
       const response = await fetch("/api/auth/status");
       const data = await response.json();
@@ -211,6 +225,7 @@ def index() -> str:
       statusNode.textContent = "Запрос в Контур...";
       statusNode.className = "status muted";
       contentNode.textContent = "";
+      contentNode.dataset.touched = "true";
 
       try {
         const response = await fetch(url);
@@ -247,6 +262,7 @@ def index() -> str:
       statusNode.textContent = "Не удалось проверить вход";
       statusNode.className = "status error";
     });
+    renderConfigHint().catch(() => {});
   </script>
 </body>
 </html>
