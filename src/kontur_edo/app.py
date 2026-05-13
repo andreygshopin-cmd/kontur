@@ -6,6 +6,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from kontur_edo.kontur_client import (
+    KonturApiError,
     KonturAuthError,
     KonturOrganizationsResponse,
     KonturUserResponse,
@@ -214,10 +215,14 @@ def kontur_organizations() -> KonturOrganizationsResponse:
         return get_organizations(get_settings())
     except KonturAuthError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    except httpx.HTTPStatusError as error:
+    except KonturApiError as error:
         raise HTTPException(
-            status_code=error.response.status_code,
-            detail="Kontur API returned an authorization or request error.",
+            status_code=502,
+            detail={
+                "stage": error.stage,
+                "kontur_status_code": error.status_code,
+                "message": error.response_text,
+            },
         ) from error
     except httpx.HTTPError as error:
         raise HTTPException(status_code=502, detail="Kontur API is unavailable.") from error
@@ -229,10 +234,14 @@ def kontur_user() -> KonturUserResponse:
         return get_current_user(get_settings())
     except KonturAuthError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    except httpx.HTTPStatusError as error:
+    except KonturApiError as error:
         raise HTTPException(
-            status_code=error.response.status_code,
-            detail="Kontur API returned an authorization or request error.",
+            status_code=502,
+            detail={
+                "stage": error.stage,
+                "kontur_status_code": error.status_code,
+                "message": error.response_text,
+            },
         ) from error
     except httpx.HTTPError as error:
         raise HTTPException(status_code=502, detail="Kontur API is unavailable.") from error

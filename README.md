@@ -48,6 +48,19 @@ Environment Variables:
 - `KONTUR_LOGIN`
 - `KONTUR_PASSWORD`
 
+## Render deploy из командной строки
+
+Для прямого запуска деплоя задайте один из вариантов:
+
+- `RENDER_DEPLOY_HOOK_URL`
+- `RENDER_API_KEY` и `RENDER_SERVICE_ID`
+
+После этого:
+
+```powershell
+.\.venv\Scripts\python.exe -m kontur_edo.render_deploy
+```
+
 ## Конфигурация
 
 Скопируйте `.env.example` в `.env` и заполните значения для доступа к API.

@@ -36,6 +36,14 @@ class KonturAuthError(RuntimeError):
     pass
 
 
+class KonturApiError(RuntimeError):
+    def __init__(self, stage: str, status_code: int, response_text: str) -> None:
+        self.stage = stage
+        self.status_code = status_code
+        self.response_text = response_text[:500]
+        super().__init__(f"{stage} failed with HTTP {status_code}: {self.response_text}")
+
+
 def get_organizations(settings: Settings) -> KonturOrganizationsResponse:
     base_url, auth_header, token = _authenticate(settings)
 
@@ -44,7 +52,7 @@ def get_organizations(settings: Settings) -> KonturOrganizationsResponse:
             "/GetMyOrganizations",
             headers=_authorized_headers(auth_header, token),
         )
-        organizations_response.raise_for_status()
+        _raise_for_status(organizations_response, "GetMyOrganizations")
 
     payload = organizations_response.json()
     return KonturOrganizationsResponse(
@@ -63,7 +71,7 @@ def get_current_user(settings: Settings) -> KonturUserResponse:
             "/V2/GetMyUser",
             headers=_authorized_headers(auth_header, token),
         )
-        user_response.raise_for_status()
+        _raise_for_status(user_response, "GetMyUser")
 
     return _normalize_user(user_response.json())
 
@@ -84,10 +92,17 @@ def _authenticate(settings: Settings) -> tuple[str, str, str]:
             headers={"Authorization": auth_header, "Content-Type": "application/json"},
             json={"login": settings.login, "password": settings.password},
         )
-        auth_response.raise_for_status()
+        _raise_for_status(auth_response, "Authenticate")
         token = auth_response.text.strip()
 
     return base_url, auth_header, token
+
+
+def _raise_for_status(response: httpx.Response, stage: str) -> None:
+    if response.is_success:
+        return
+
+    raise KonturApiError(stage, response.status_code, response.text.strip())
 
 
 def _authorized_headers(auth_header: str, token: str) -> dict[str, str]:
