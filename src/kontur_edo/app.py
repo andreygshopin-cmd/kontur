@@ -115,6 +115,18 @@ def index() -> str:
       buttons.forEach((button) => { button.disabled = isLoading; });
     }
 
+    function formatErrorDetail(detail) {
+      if (typeof detail === "string") return detail;
+      if (detail && typeof detail === "object") {
+        const parts = [];
+        if (detail.stage) parts.push(`Этап: ${detail.stage}`);
+        if (detail.kontur_status_code) parts.push(`HTTP Контур: ${detail.kontur_status_code}`);
+        if (detail.message) parts.push(`Сообщение: ${detail.message}`);
+        return parts.length ? parts.join("\\n") : JSON.stringify(detail, null, 2);
+      }
+      return "Ошибка запроса";
+    }
+
     function renderOrganizations(data) {
       const rows = data.organizations.flatMap((org) => {
         const boxes = org.boxes.length ? org.boxes : [{ box_id: "", title: "" }];
@@ -160,7 +172,7 @@ def index() -> str:
       try {
         const response = await fetch(url);
         const data = await response.json();
-        if (!response.ok) throw new Error(data.detail || "Ошибка запроса");
+        if (!response.ok) throw new Error(formatErrorDetail(data.detail));
         statusNode.textContent = successTitle(data);
         onSuccess(data);
       } catch (error) {
