@@ -23,11 +23,52 @@ class KonturOrganizationsResponse(BaseModel):
     organizations: list[KonturOrganization]
 
 
+class KonturUserResponse(BaseModel):
+    user_id: str | None = None
+    login: str | None = None
+    email: str | None = None
+    last_name: str | None = None
+    first_name: str | None = None
+    middle_name: str | None = None
+
+
 class KonturAuthError(RuntimeError):
     pass
 
 
 def get_organizations(settings: Settings) -> KonturOrganizationsResponse:
+    base_url, auth_header, token = _authenticate(settings)
+
+    with httpx.Client(base_url=base_url, timeout=30.0) as client:
+        organizations_response = client.get(
+            "/GetMyOrganizations",
+            headers=_authorized_headers(auth_header, token),
+        )
+        organizations_response.raise_for_status()
+
+    payload = organizations_response.json()
+    return KonturOrganizationsResponse(
+        organizations=[
+            _normalize_organization(organization)
+            for organization in payload.get("Organizations", payload.get("organizations", []))
+        ]
+    )
+
+
+def get_current_user(settings: Settings) -> KonturUserResponse:
+    base_url, auth_header, token = _authenticate(settings)
+
+    with httpx.Client(base_url=base_url, timeout=30.0) as client:
+        user_response = client.get(
+            "/V2/GetMyUser",
+            headers=_authorized_headers(auth_header, token),
+        )
+        user_response.raise_for_status()
+
+    return _normalize_user(user_response.json())
+
+
+def _authenticate(settings: Settings) -> tuple[str, str, str]:
     if not settings.api_key or not settings.login or not settings.password:
         raise KonturAuthError(
             "KONTUR_API_KEY, KONTUR_LOGIN and KONTUR_PASSWORD must be configured."
@@ -46,22 +87,14 @@ def get_organizations(settings: Settings) -> KonturOrganizationsResponse:
         auth_response.raise_for_status()
         token = auth_response.text.strip()
 
-        organizations_response = client.get(
-            "/GetMyOrganizations",
-            headers={
-                "Authorization": f"{auth_header},ddauth_token={token}",
-                "Accept": "application/json",
-            },
-        )
-        organizations_response.raise_for_status()
+    return base_url, auth_header, token
 
-    payload = organizations_response.json()
-    return KonturOrganizationsResponse(
-        organizations=[
-            _normalize_organization(organization)
-            for organization in payload.get("Organizations", payload.get("organizations", []))
-        ]
-    )
+
+def _authorized_headers(auth_header: str, token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"{auth_header},ddauth_token={token}",
+        "Accept": "application/json",
+    }
 
 
 def _normalize_organization(organization: dict[str, Any]) -> KonturOrganization:
@@ -83,4 +116,15 @@ def _normalize_organization(organization: dict[str, Any]) -> KonturOrganization:
             for box in boxes
             if box.get("BoxId") or box.get("boxId")
         ],
+    )
+
+
+def _normalize_user(user: dict[str, Any]) -> KonturUserResponse:
+    return KonturUserResponse(
+        user_id=user.get("Id") or user.get("UserId") or user.get("id") or user.get("userId"),
+        login=user.get("Login") or user.get("login"),
+        email=user.get("Email") or user.get("email"),
+        last_name=user.get("LastName") or user.get("lastName"),
+        first_name=user.get("FirstName") or user.get("firstName"),
+        middle_name=user.get("MiddleName") or user.get("middleName"),
     )

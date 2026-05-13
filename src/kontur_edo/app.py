@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from kontur_edo.kontur_client import (
     KonturAuthError,
     KonturOrganizationsResponse,
+    KonturUserResponse,
+    get_current_user,
     get_organizations,
 )
 from kontur_edo.settings import Settings
@@ -54,10 +56,12 @@ def index() -> str:
     main { max-width: 920px; margin: 0 auto; padding: 40px 20px; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
     h1 { margin: 0; font-size: 28px; line-height: 1.2; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
     button {
       border: 0; border-radius: 6px; background: #0f766e; color: white;
       padding: 12px 18px; font-size: 16px; cursor: pointer;
     }
+    button.secondary { background: #2563eb; }
     button:disabled { opacity: .65; cursor: progress; }
     .panel { margin-top: 28px; background: white; border: 1px solid #d9dee7; border-radius: 8px; }
     .status { padding: 16px 18px; border-bottom: 1px solid #e5e9f0; font-weight: 700; }
@@ -70,13 +74,23 @@ def index() -> str:
     code { word-break: break-all; }
     .error { color: #b42318; }
     .muted { color: #667085; }
+    .details { display: grid; grid-template-columns: 180px 1fr; gap: 10px 16px; }
+    .label { color: #52606d; font-weight: 700; }
+    @media (max-width: 680px) {
+      header { align-items: flex-start; flex-direction: column; }
+      .actions { justify-content: flex-start; }
+      .details { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
   <main>
     <header>
       <h1>Контур ЭДО</h1>
-      <button id="load">Получить организации</button>
+      <div class="actions">
+        <button id="load-organizations">Получить организации</button>
+        <button id="load-user" class="secondary">Получить личные данные</button>
+      </div>
     </header>
     <section class="panel">
       <div id="status" class="status muted">Готово</div>
@@ -84,7 +98,9 @@ def index() -> str:
     </section>
   </main>
   <script>
-    const button = document.getElementById("load");
+    const organizationsButton = document.getElementById("load-organizations");
+    const userButton = document.getElementById("load-user");
+    const buttons = [organizationsButton, userButton];
     const statusNode = document.getElementById("status");
     const contentNode = document.getElementById("content");
 
@@ -92,6 +108,10 @@ def index() -> str:
       return String(value ?? "").replace(/[&<>"']/g, (char) => ({
         "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
       })[char]);
+    }
+
+    function setLoading(isLoading) {
+      buttons.forEach((button) => { button.disabled = isLoading; });
     }
 
     function renderOrganizations(data) {
@@ -115,26 +135,53 @@ def index() -> str:
       ` : `<span class="muted">Организации не найдены.</span>`;
     }
 
-    button.addEventListener("click", async () => {
-      button.disabled = true;
+    function renderUser(user) {
+      const fullName = [user.last_name, user.first_name, user.middle_name]
+        .filter(Boolean)
+        .join(" ");
+      contentNode.innerHTML = `
+        <div class="details">
+          <div class="label">ФИО</div><div>${escapeHtml(fullName || "Не передано")}</div>
+          <div class="label">Фамилия</div><div>${escapeHtml(user.last_name || "Не передано")}</div>
+          <div class="label">Email</div><div>${escapeHtml(user.email || "Не передано")}</div>
+          <div class="label">Login</div><div>${escapeHtml(user.login || "Не передано")}</div>
+          <div class="label">User ID</div><div><code>${escapeHtml(user.user_id || "")}</code></div>
+        </div>
+      `;
+    }
+
+    async function loadData(url, onSuccess, successTitle) {
+      setLoading(true);
       statusNode.textContent = "Запрос в Контур...";
       statusNode.className = "status muted";
       contentNode.textContent = "";
 
       try {
-        const response = await fetch("/api/kontur/organizations");
+        const response = await fetch(url);
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || "Ошибка запроса");
-        statusNode.textContent = `Найдено организаций: ${data.organizations.length}`;
-        renderOrganizations(data);
+        statusNode.textContent = successTitle(data);
+        onSuccess(data);
       } catch (error) {
         statusNode.textContent = "Ошибка";
         statusNode.className = "status error";
         contentNode.textContent = error.message;
       } finally {
-        button.disabled = false;
+        setLoading(false);
       }
-    });
+    }
+
+    organizationsButton.addEventListener("click", () => loadData(
+      "/api/kontur/organizations",
+      renderOrganizations,
+      (data) => `Найдено организаций: ${data.organizations.length}`
+    ));
+
+    userButton.addEventListener("click", () => loadData(
+      "/api/kontur/user",
+      renderUser,
+      () => "Личные данные получены"
+    ));
   </script>
 </body>
 </html>
@@ -165,6 +212,21 @@ def config() -> ConfigResponse:
 def kontur_organizations() -> KonturOrganizationsResponse:
     try:
         return get_organizations(get_settings())
+    except KonturAuthError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except httpx.HTTPStatusError as error:
+        raise HTTPException(
+            status_code=error.response.status_code,
+            detail="Kontur API returned an authorization or request error.",
+        ) from error
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail="Kontur API is unavailable.") from error
+
+
+@app.get("/api/kontur/user", response_model=KonturUserResponse)
+def kontur_user() -> KonturUserResponse:
+    try:
+        return get_current_user(get_settings())
     except KonturAuthError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except httpx.HTTPStatusError as error:

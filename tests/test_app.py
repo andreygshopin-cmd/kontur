@@ -9,6 +9,7 @@ from kontur_edo.kontur_client import (
     KonturBox,
     KonturOrganization,
     KonturOrganizationsResponse,
+    KonturUserResponse,
 )
 from kontur_edo.settings import Settings
 
@@ -28,11 +29,12 @@ def test_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_index_has_organization_button() -> None:
+def test_index_has_buttons() -> None:
     response = client.get("/")
 
     assert response.status_code == 200
     assert "Получить организации" in response.text
+    assert "Получить личные данные" in response.text
 
 
 def test_config_hides_secret_values() -> None:
@@ -61,3 +63,22 @@ def test_kontur_organizations(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["organizations"][0]["boxes"][0]["box_id"] == "box-id@diadoc.ru"
+
+
+def test_kontur_user(monkeypatch) -> None:
+    def fake_get_current_user(_settings):
+        return KonturUserResponse(
+            user_id="user-id",
+            login="test-login",
+            email="test@example.com",
+            last_name="Иванов",
+            first_name="Иван",
+        )
+
+    monkeypatch.setattr(app_module, "get_current_user", fake_get_current_user)
+
+    response = client.get("/api/kontur/user")
+
+    assert response.status_code == 200
+    assert response.json()["last_name"] == "Иванов"
+    assert response.json()["email"] == "test@example.com"
