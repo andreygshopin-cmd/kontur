@@ -71,6 +71,15 @@ def test_login_redirects_to_kontur_identity() -> None:
     assert "Diadoc.PublicAPI.Staging" in location
 
 
+def test_login_uses_kot_test_default_when_env_missing(monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "get_settings", lambda: Settings(_env_file=None))
+
+    response = client.get("/auth/kontur/login", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert "client_id=KOT_test" in response.headers["location"]
+
+
 def test_kontur_organizations_requires_login() -> None:
     response = client.get("/api/kontur/organizations")
 

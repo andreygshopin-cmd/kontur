@@ -9,9 +9,9 @@ class Settings(BaseSettings):
     auth_base_url: HttpUrl = Field(default=HttpUrl("https://identity.testkontur.ru"))
     scope: str = "openid profile email offline_access Diadoc.PublicAPI.Staging"
     redirect_uri: str | None = None
-    app_name: str | None = None
+    app_name: str | None = "KOT_test"
     api_key: str | None = None
-    client_id: str | None = None
+    client_id: str | None = "KOT_test"
     client_secret: str | None = None
     login: str | None = None
     password: str | None = None
