@@ -20,8 +20,10 @@ python -m pytest
 
 После запуска:
 
+- `/` — страница с кнопкой проверки организаций;
 - `GET /health` — проверка, что сервис жив;
 - `GET /api/config` — проверка, какие переменные окружения настроены без вывода секретов;
+- `GET /api/kontur/organizations` — авторизация в Контуре и получение организаций;
 - `/docs` — Swagger UI.
 
 ## Render
@@ -38,9 +40,12 @@ python -m pytest
 Environment Variables:
 
 - `KONTUR_BASE_URL`
+- `KONTUR_APP_NAME`
 - `KONTUR_API_KEY`
 - `KONTUR_CLIENT_ID`
 - `KONTUR_CLIENT_SECRET`
+- `KONTUR_LOGIN`
+- `KONTUR_PASSWORD`
 
 ## Конфигурация
 
