@@ -1,4 +1,5 @@
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 from pydantic import BaseModel
@@ -32,6 +33,15 @@ class KonturUserResponse(BaseModel):
     middle_name: str | None = None
 
 
+class KonturTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "Bearer"
+    expires_in: int | None = None
+    refresh_token: str | None = None
+    id_token: str | None = None
+    scope: str | None = None
+
+
 class KonturAuthError(RuntimeError):
     pass
 
@@ -44,13 +54,63 @@ class KonturApiError(RuntimeError):
         super().__init__(f"{stage} failed with HTTP {status_code}: {self.response_text}")
 
 
-def get_organizations(settings: Settings) -> KonturOrganizationsResponse:
-    base_url, auth_header, token = _authenticate(settings)
+def build_authorization_url(
+    settings: Settings,
+    *,
+    redirect_uri: str,
+    state: str,
+    nonce: str,
+) -> str:
+    client_id = _client_id(settings)
+    if not client_id:
+        raise KonturAuthError("KONTUR_CLIENT_ID must be configured.")
 
-    with httpx.Client(base_url=base_url, timeout=30.0) as client:
+    query = urlencode(
+        {
+            "response_type": "code",
+            "client_id": client_id,
+            "scope": settings.scope,
+            "redirect_uri": redirect_uri,
+            "nonce": nonce,
+            "state": state,
+        }
+    )
+    return f"{str(settings.auth_base_url).rstrip('/')}/connect/authorize?{query}"
+
+
+def exchange_authorization_code(
+    settings: Settings,
+    *,
+    code: str,
+    redirect_uri: str,
+) -> KonturTokenResponse:
+    client_id = _client_id(settings)
+    client_secret = _client_secret(settings)
+    if not client_id or not client_secret:
+        raise KonturAuthError("KONTUR_CLIENT_ID and KONTUR_CLIENT_SECRET must be configured.")
+
+    with httpx.Client(base_url=str(settings.auth_base_url).rstrip("/"), timeout=30.0) as client:
+        response = client.post(
+            "/connect/token",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri,
+            },
+        )
+        _raise_for_status(response, "Token")
+
+    return KonturTokenResponse.model_validate(response.json())
+
+
+def get_organizations(settings: Settings, access_token: str) -> KonturOrganizationsResponse:
+    with httpx.Client(base_url=str(settings.base_url).rstrip("/"), timeout=30.0) as client:
         organizations_response = client.get(
             "/GetMyOrganizations",
-            headers=_authorized_headers(auth_header, token),
+            headers=_bearer_headers(access_token),
         )
         _raise_for_status(organizations_response, "GetMyOrganizations")
 
@@ -63,39 +123,15 @@ def get_organizations(settings: Settings) -> KonturOrganizationsResponse:
     )
 
 
-def get_current_user(settings: Settings) -> KonturUserResponse:
-    base_url, auth_header, token = _authenticate(settings)
-
-    with httpx.Client(base_url=base_url, timeout=30.0) as client:
+def get_current_user(settings: Settings, access_token: str) -> KonturUserResponse:
+    with httpx.Client(base_url=str(settings.base_url).rstrip("/"), timeout=30.0) as client:
         user_response = client.get(
             "/V2/GetMyUser",
-            headers=_authorized_headers(auth_header, token),
+            headers=_bearer_headers(access_token),
         )
         _raise_for_status(user_response, "GetMyUser")
 
     return _normalize_user(user_response.json())
-
-
-def _authenticate(settings: Settings) -> tuple[str, str, str]:
-    if not settings.api_key or not settings.login or not settings.password:
-        raise KonturAuthError(
-            "KONTUR_API_KEY, KONTUR_LOGIN and KONTUR_PASSWORD must be configured."
-        )
-
-    base_url = str(settings.base_url).rstrip("/")
-    auth_header = f"DiadocAuth ddauth_api_client_id={settings.api_key}"
-
-    with httpx.Client(base_url=base_url, timeout=30.0) as client:
-        auth_response = client.post(
-            "/V3/Authenticate",
-            params={"type": "password"},
-            headers={"Authorization": auth_header, "Content-Type": "application/json"},
-            json={"login": settings.login, "password": settings.password},
-        )
-        _raise_for_status(auth_response, "Authenticate")
-        token = auth_response.text.strip()
-
-    return base_url, auth_header, token
 
 
 def _raise_for_status(response: httpx.Response, stage: str) -> None:
@@ -105,11 +141,19 @@ def _raise_for_status(response: httpx.Response, stage: str) -> None:
     raise KonturApiError(stage, response.status_code, response.text.strip())
 
 
-def _authorized_headers(auth_header: str, token: str) -> dict[str, str]:
+def _bearer_headers(access_token: str) -> dict[str, str]:
     return {
-        "Authorization": f"{auth_header},ddauth_token={token}",
+        "Authorization": f"Bearer {access_token}",
         "Accept": "application/json",
     }
+
+
+def _client_id(settings: Settings) -> str | None:
+    return settings.client_id or settings.app_name
+
+
+def _client_secret(settings: Settings) -> str | None:
+    return settings.client_secret or settings.api_key
 
 
 def _normalize_organization(organization: dict[str, Any]) -> KonturOrganization:

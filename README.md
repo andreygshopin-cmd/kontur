@@ -20,9 +20,11 @@ python -m pytest
 
 После запуска:
 
-- `/` — страница с кнопкой проверки организаций;
+- `/` — страница входа в Контур и кнопки проверки данных;
 - `GET /health` — проверка, что сервис жив;
 - `GET /api/config` — проверка, какие переменные окружения настроены без вывода секретов;
+- `GET /auth/kontur/login` — вход через Контур ID / OIDC;
+- `GET /auth/kontur/callback` — callback для Authorization Code Flow;
 - `GET /api/kontur/organizations` — авторизация в Контуре и получение организаций;
 - `GET /api/kontur/user` — авторизация в Контуре и получение данных пользователя;
 - `/docs` — Swagger UI.
@@ -41,12 +43,25 @@ python -m pytest
 Environment Variables:
 
 - `KONTUR_BASE_URL`
+- `KONTUR_AUTH_BASE_URL`
+- `KONTUR_SCOPE`
+- `KONTUR_REDIRECT_URI`
 - `KONTUR_APP_NAME`
-- `KONTUR_API_KEY`
 - `KONTUR_CLIENT_ID`
 - `KONTUR_CLIENT_SECRET`
-- `KONTUR_LOGIN`
-- `KONTUR_PASSWORD`
+
+Для тестового контура:
+
+```text
+KONTUR_BASE_URL=https://diadoc-api.kontur.ru
+KONTUR_AUTH_BASE_URL=https://identity.testkontur.ru
+KONTUR_SCOPE=openid profile email offline_access Diadoc.PublicAPI.Staging
+KONTUR_CLIENT_ID=KOT_test
+KONTUR_CLIENT_SECRET=<API key из Кабинета интегратора>
+KONTUR_REDIRECT_URI=https://<render-service>/auth/kontur/callback
+```
+
+В Кабинете интегратора для приложения укажите такой же redirect URI.
 
 ## Render deploy из командной строки
 

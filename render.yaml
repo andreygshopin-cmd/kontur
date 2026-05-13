@@ -11,12 +11,18 @@ services:
         value: 3.11.9
       - key: KONTUR_BASE_URL
         value: https://diadoc-api.kontur.ru
+      - key: KONTUR_AUTH_BASE_URL
+        value: https://identity.testkontur.ru
+      - key: KONTUR_SCOPE
+        value: openid profile email offline_access Diadoc.PublicAPI.Staging
+      - key: KONTUR_REDIRECT_URI
+        sync: false
       - key: KONTUR_APP_NAME
         value: KOT_test
       - key: KONTUR_API_KEY
         sync: false
       - key: KONTUR_CLIENT_ID
-        sync: false
+        value: KOT_test
       - key: KONTUR_CLIENT_SECRET
         sync: false
       - key: KONTUR_LOGIN

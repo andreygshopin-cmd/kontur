@@ -1,27 +1,59 @@
+from dataclasses import dataclass
 from functools import lru_cache
+from secrets import token_urlsafe
+from time import time
 
 import httpx
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from kontur_edo.kontur_client import (
     KonturApiError,
     KonturAuthError,
     KonturOrganizationsResponse,
+    KonturTokenResponse,
     KonturUserResponse,
+    build_authorization_url,
+    exchange_authorization_code,
     get_current_user,
     get_organizations,
 )
 from kontur_edo.settings import Settings
+
+SESSION_COOKIE_NAME = "kontur_session"
+AUTH_STATE_TTL_SECONDS = 600
+
+
+@dataclass
+class PendingAuth:
+    redirect_uri: str
+    created_at: float
+
+
+@dataclass
+class UserSession:
+    token: KonturTokenResponse
+    created_at: float
+
+
+_PENDING_AUTH: dict[str, PendingAuth] = {}
+_SESSIONS: dict[str, UserSession] = {}
 
 
 class HealthResponse(BaseModel):
     status: str
 
 
+class AuthStatusResponse(BaseModel):
+    authenticated: bool
+
+
 class ConfigResponse(BaseModel):
     kontur_base_url: str
+    kontur_auth_base_url: str
+    scope: str
+    redirect_uri: str | None
     app_name: str | None
     api_key_configured: bool
     client_id_configured: bool
@@ -54,19 +86,21 @@ def index() -> str:
   <style>
     :root { color-scheme: light; font-family: Arial, sans-serif; }
     body { margin: 0; background: #f6f7f9; color: #1f2933; }
-    main { max-width: 920px; margin: 0 auto; padding: 40px 20px; }
+    main { max-width: 980px; margin: 0 auto; padding: 40px 20px; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
     h1 { margin: 0; font-size: 28px; line-height: 1.2; }
     .actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
-    button {
+    button, a.button {
       border: 0; border-radius: 6px; background: #0f766e; color: white;
-      padding: 12px 18px; font-size: 16px; cursor: pointer;
+      padding: 12px 18px; font-size: 16px; cursor: pointer; text-decoration: none;
+      display: inline-flex; align-items: center; justify-content: center;
     }
-    button.secondary { background: #2563eb; }
+    button.secondary, a.secondary { background: #2563eb; }
+    button.ghost, a.ghost { background: #475569; }
     button:disabled { opacity: .65; cursor: progress; }
     .panel { margin-top: 28px; background: white; border: 1px solid #d9dee7; border-radius: 8px; }
     .status { padding: 16px 18px; border-bottom: 1px solid #e5e9f0; font-weight: 700; }
-    .content { padding: 18px; }
+    .content { padding: 18px; white-space: pre-line; }
     table { width: 100%; border-collapse: collapse; font-size: 14px; }
     th, td {
       text-align: left; padding: 10px; border-bottom: 1px solid #edf0f4; vertical-align: top;
@@ -77,7 +111,7 @@ def index() -> str:
     .muted { color: #667085; }
     .details { display: grid; grid-template-columns: 180px 1fr; gap: 10px 16px; }
     .label { color: #52606d; font-weight: 700; }
-    @media (max-width: 680px) {
+    @media (max-width: 720px) {
       header { align-items: flex-start; flex-direction: column; }
       .actions { justify-content: flex-start; }
       .details { grid-template-columns: 1fr; }
@@ -89,18 +123,20 @@ def index() -> str:
     <header>
       <h1>Контур ЭДО</h1>
       <div class="actions">
+        <a href="/auth/kontur/login" class="button ghost" id="login">Войти в Контур</a>
         <button id="load-organizations">Получить организации</button>
         <button id="load-user" class="secondary">Получить личные данные</button>
       </div>
     </header>
     <section class="panel">
-      <div id="status" class="status muted">Готово</div>
-      <div id="content" class="content muted">Нажмите кнопку, чтобы проверить доступ.</div>
+      <div id="status" class="status muted">Проверяем вход...</div>
+      <div id="content" class="content muted">Для доступа к данным сначала войдите в Контур.</div>
     </section>
   </main>
   <script>
     const organizationsButton = document.getElementById("load-organizations");
     const userButton = document.getElementById("load-user");
+    const loginLink = document.getElementById("login");
     const buttons = [organizationsButton, userButton];
     const statusNode = document.getElementById("status");
     const contentNode = document.getElementById("content");
@@ -163,6 +199,13 @@ def index() -> str:
       `;
     }
 
+    async function refreshAuthStatus() {
+      const response = await fetch("/api/auth/status");
+      const data = await response.json();
+      statusNode.textContent = data.authenticated ? "Вход выполнен" : "Нужно войти в Контур";
+      loginLink.textContent = data.authenticated ? "Войти заново" : "Войти в Контур";
+    }
+
     async function loadData(url, onSuccess, successTitle) {
       setLoading(true);
       statusNode.textContent = "Запрос в Контур...";
@@ -172,6 +215,10 @@ def index() -> str:
       try {
         const response = await fetch(url);
         const data = await response.json();
+        if (response.status === 401) {
+          window.location.href = "/auth/kontur/login";
+          return;
+        }
         if (!response.ok) throw new Error(formatErrorDetail(data.detail));
         statusNode.textContent = successTitle(data);
         onSuccess(data);
@@ -195,6 +242,11 @@ def index() -> str:
       renderUser,
       () => "Личные данные получены"
     ));
+
+    refreshAuthStatus().catch(() => {
+      statusNode.textContent = "Не удалось проверить вход";
+      statusNode.className = "status error";
+    });
   </script>
 </body>
 </html>
@@ -206,54 +258,173 @@ def health() -> HealthResponse:
     return HealthResponse(status="ok")
 
 
+@app.get("/api/auth/status", response_model=AuthStatusResponse)
+def auth_status(request: Request) -> AuthStatusResponse:
+    return AuthStatusResponse(authenticated=_get_session(request) is not None)
+
+
+@app.get("/auth/kontur/login")
+def kontur_login(request: Request) -> RedirectResponse:
+    settings = get_settings()
+    state = token_urlsafe(24)
+    nonce = token_urlsafe(24)
+    redirect_uri = _get_redirect_uri(request, settings)
+    _cleanup_pending_auth()
+    _PENDING_AUTH[state] = PendingAuth(redirect_uri=redirect_uri, created_at=time())
+
+    try:
+        authorization_url = build_authorization_url(
+            settings,
+            redirect_uri=redirect_uri,
+            state=state,
+            nonce=nonce,
+        )
+    except KonturAuthError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    return RedirectResponse(authorization_url)
+
+
+@app.get("/auth/kontur/callback", response_model=None)
+def kontur_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+) -> RedirectResponse | HTMLResponse:
+    if error:
+        return _auth_result_page("Ошибка входа", error_description or error)
+
+    if not code or not state or state not in _PENDING_AUTH:
+        return _auth_result_page("Ошибка входа", "Некорректный или устаревший state.")
+
+    pending_auth = _PENDING_AUTH.pop(state)
+
+    try:
+        token = exchange_authorization_code(
+            get_settings(),
+            code=code,
+            redirect_uri=pending_auth.redirect_uri,
+        )
+    except (KonturAuthError, KonturApiError, httpx.HTTPError) as exc:
+        return _auth_result_page("Ошибка получения токена", str(exc))
+
+    session_id = token_urlsafe(32)
+    _SESSIONS[session_id] = UserSession(token=token, created_at=time())
+    response = RedirectResponse("/")
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        session_id,
+        httponly=True,
+        samesite="lax",
+        max_age=token.expires_in or 3600,
+    )
+    return response
+
+
 @app.get("/api/config", response_model=ConfigResponse)
-def config() -> ConfigResponse:
+def config(request: Request) -> ConfigResponse:
     settings = get_settings()
 
     return ConfigResponse(
         kontur_base_url=str(settings.base_url),
+        kontur_auth_base_url=str(settings.auth_base_url),
+        scope=settings.scope,
+        redirect_uri=_get_redirect_uri(request, settings),
         app_name=settings.app_name,
         api_key_configured=bool(settings.api_key),
-        client_id_configured=bool(settings.client_id),
-        client_secret_configured=bool(settings.client_secret),
+        client_id_configured=bool(settings.client_id or settings.app_name),
+        client_secret_configured=bool(settings.client_secret or settings.api_key),
         login_configured=bool(settings.login),
         password_configured=bool(settings.password),
     )
 
 
 @app.get("/api/kontur/organizations", response_model=KonturOrganizationsResponse)
-def kontur_organizations() -> KonturOrganizationsResponse:
+def kontur_organizations(request: Request) -> KonturOrganizationsResponse:
+    session = _require_session(request)
+
     try:
-        return get_organizations(get_settings())
-    except KonturAuthError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        return get_organizations(get_settings(), session.token.access_token)
     except KonturApiError as error:
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "stage": error.stage,
-                "kontur_status_code": error.status_code,
-                "message": error.response_text,
-            },
-        ) from error
+        raise _to_http_exception(error) from error
     except httpx.HTTPError as error:
         raise HTTPException(status_code=502, detail="Kontur API is unavailable.") from error
 
 
 @app.get("/api/kontur/user", response_model=KonturUserResponse)
-def kontur_user() -> KonturUserResponse:
+def kontur_user(request: Request) -> KonturUserResponse:
+    session = _require_session(request)
+
     try:
-        return get_current_user(get_settings())
-    except KonturAuthError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        return get_current_user(get_settings(), session.token.access_token)
     except KonturApiError as error:
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "stage": error.stage,
-                "kontur_status_code": error.status_code,
-                "message": error.response_text,
-            },
-        ) from error
+        raise _to_http_exception(error) from error
     except httpx.HTTPError as error:
         raise HTTPException(status_code=502, detail="Kontur API is unavailable.") from error
+
+
+def _get_redirect_uri(request: Request, settings: Settings) -> str:
+    if settings.redirect_uri:
+        return settings.redirect_uri
+
+    return str(request.url_for("kontur_callback"))
+
+
+def _get_session(request: Request) -> UserSession | None:
+    session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    if not session_id:
+        return None
+    return _SESSIONS.get(session_id)
+
+
+def _require_session(request: Request) -> UserSession:
+    session = _get_session(request)
+    if session is None:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    return session
+
+
+def _cleanup_pending_auth() -> None:
+    now = time()
+    expired_states = [
+        state
+        for state, pending_auth in _PENDING_AUTH.items()
+        if now - pending_auth.created_at > AUTH_STATE_TTL_SECONDS
+    ]
+    for state in expired_states:
+        del _PENDING_AUTH[state]
+
+
+def _to_http_exception(error: KonturApiError) -> HTTPException:
+    return HTTPException(
+        status_code=502,
+        detail={
+            "stage": error.stage,
+            "kontur_status_code": error.status_code,
+            "message": error.response_text,
+        },
+    )
+
+
+def _auth_result_page(title: str, message: str) -> HTMLResponse:
+    escaped_title = title.replace("<", "&lt;").replace(">", "&gt;")
+    escaped_message = message.replace("<", "&lt;").replace(">", "&gt;")
+    return HTMLResponse(
+        f"""
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>{escaped_title}</title>
+</head>
+<body>
+  <h1>{escaped_title}</h1>
+  <pre>{escaped_message}</pre>
+  <a href="/">Вернуться</a>
+</body>
+</html>
+""",
+        status_code=400,
+    )
