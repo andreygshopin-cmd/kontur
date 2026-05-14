@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 import kontur_edo.app as app_module
 from kontur_edo.app import SESSION_COOKIE_NAME, UserSession, app
+from kontur_edo.kedo_client import KedoTestDocumentResponse
 from kontur_edo.kontur_client import (
     KonturBox,
     KonturOrganization,
@@ -50,6 +51,7 @@ def test_index_has_buttons() -> None:
     assert "Войти в Контур" in response.text
     assert "Получить организации" in response.text
     assert "Получить личные данные" in response.text
+    assert "Отправить тестовый файл в КЭДО" in response.text
 
 
 def test_config_hides_secret_values() -> None:
@@ -58,6 +60,8 @@ def test_config_hides_secret_values() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["client_secret_configured"] is True
+    assert payload["kedo_base_url"] == "https://api.testkontur.ru/kedo"
+    assert payload["kedo_api_key_configured"] is True
     assert "hidden-token" not in response.text
 
 
@@ -126,6 +130,28 @@ def test_kontur_user(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["last_name"] == "Иванов"
     assert response.json()["email"] == "test@example.com"
+
+
+def test_kedo_test_document(monkeypatch) -> None:
+    def fake_send_test_document(_settings, *, access_token=None):
+        assert access_token is None
+        return KedoTestDocumentResponse(
+            org_id="11111111-1111-1111-1111-111111111111",
+            employee_id="22222222-2222-2222-2222-222222222222",
+            document_type_id="33333333-3333-3333-3333-333333333333",
+            file_name="test-kedo.txt",
+            content_location="44444444-4444-4444-4444-444444444444",
+            processed_content_location="55555555-5555-5555-5555-555555555555",
+            process_ids=["66666666-6666-6666-6666-666666666666"],
+            raw_response=[{"id": "66666666-6666-6666-6666-666666666666"}],
+        )
+
+    monkeypatch.setattr(app_module, "send_test_document", fake_send_test_document)
+
+    response = client.post("/api/kedo/test-document")
+
+    assert response.status_code == 200
+    assert response.json()["process_ids"] == ["66666666-6666-6666-6666-666666666666"]
 
 
 def _set_session_cookie() -> None:

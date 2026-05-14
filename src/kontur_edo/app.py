@@ -8,6 +8,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
+from kontur_edo.kedo_client import (
+    KedoApiError,
+    KedoAuthError,
+    KedoTestDocumentResponse,
+    send_test_document,
+)
 from kontur_edo.kontur_client import (
     KonturApiError,
     KonturAuthError,
@@ -60,6 +66,13 @@ class ConfigResponse(BaseModel):
     client_secret_configured: bool
     login_configured: bool
     password_configured: bool
+    kedo_base_url: str
+    kedo_api_key_configured: bool
+    kedo_org_id: str | None
+    kedo_employee_id: str | None
+    kedo_document_type_id: str | None
+    kedo_document_type_name: str | None
+    kedo_signature_types: str
 
 
 @lru_cache
@@ -126,6 +139,7 @@ def index() -> str:
         <a href="/auth/kontur/login" class="button ghost" id="login">Войти в Контур</a>
         <button id="load-organizations">Получить организации</button>
         <button id="load-user" class="secondary">Получить личные данные</button>
+        <button id="send-kedo-test" class="ghost">Отправить тестовый файл в КЭДО</button>
       </div>
     </header>
     <section class="panel">
@@ -136,8 +150,9 @@ def index() -> str:
   <script>
     const organizationsButton = document.getElementById("load-organizations");
     const userButton = document.getElementById("load-user");
+    const kedoButton = document.getElementById("send-kedo-test");
     const loginLink = document.getElementById("login");
-    const buttons = [organizationsButton, userButton];
+    const buttons = [organizationsButton, userButton, kedoButton];
     const statusNode = document.getElementById("status");
     const contentNode = document.getElementById("content");
 
@@ -199,6 +214,23 @@ def index() -> str:
       `;
     }
 
+    function renderKedoTestDocument(data) {
+      const contentLocation = data.processed_content_location || data.content_location || "";
+      contentNode.innerHTML = `
+        <div class="details">
+          <div class="label">Организация</div><div><code>${escapeHtml(data.org_id)}</code></div>
+          <div class="label">Сотрудник</div><div><code>${escapeHtml(data.employee_id)}</code></div>
+          <div class="label">Тип документа</div>
+          <div><code>${escapeHtml(data.document_type_id)}</code></div>
+          <div class="label">Файл</div><div>${escapeHtml(data.file_name)}</div>
+          <div class="label">Content location</div>
+          <div><code>${escapeHtml(contentLocation)}</code></div>
+          <div class="label">Process ID</div>
+          <div><code>${escapeHtml((data.process_ids || []).join(", "))}</code></div>
+        </div>
+      `;
+    }
+
     async function renderConfigHint() {
       const response = await fetch("/api/config");
       const config = await response.json();
@@ -209,6 +241,10 @@ def index() -> str:
           <div><code>${escapeHtml(config.redirect_uri || "")}</code></div>
           <div class="label">Scope</div>
           <div><code>${escapeHtml(config.scope || "")}</code></div>
+          <div class="label">KEDO API</div>
+          <div><code>${escapeHtml(config.kedo_base_url || "")}</code></div>
+          <div class="label">KEDO target</div>
+          <div><code>${escapeHtml(config.kedo_employee_id || "auto")}</code></div>
         </div>
       `;
     }
@@ -220,7 +256,7 @@ def index() -> str:
       loginLink.textContent = data.authenticated ? "Войти заново" : "Войти в Контур";
     }
 
-    async function loadData(url, onSuccess, successTitle) {
+    async function loadData(url, onSuccess, successTitle, method = "GET") {
       setLoading(true);
       statusNode.textContent = "Запрос в Контур...";
       statusNode.className = "status muted";
@@ -228,7 +264,7 @@ def index() -> str:
       contentNode.dataset.touched = "true";
 
       try {
-        const response = await fetch(url);
+        const response = await fetch(url, { method });
         const data = await response.json();
         if (response.status === 401) {
           window.location.href = "/auth/kontur/login";
@@ -256,6 +292,14 @@ def index() -> str:
       "/api/kontur/user",
       renderUser,
       () => "Личные данные получены"
+    ));
+
+    kedoButton.addEventListener("click", () => loadData(
+      "/api/kedo/test-document",
+      renderKedoTestDocument,
+      (data) => `Тестовый файл отправлен в КЭДО. ` +
+        `Процессов: ${(data.process_ids || []).length || 1}`,
+      "POST"
     ));
 
     refreshAuthStatus().catch(() => {
@@ -354,6 +398,15 @@ def config(request: Request) -> ConfigResponse:
         client_secret_configured=bool(settings.client_secret or settings.api_key),
         login_configured=bool(settings.login),
         password_configured=bool(settings.password),
+        kedo_base_url=str(settings.kedo_base_url),
+        kedo_api_key_configured=bool(
+            settings.kedo_api_key or settings.client_secret or settings.api_key
+        ),
+        kedo_org_id=settings.kedo_org_id,
+        kedo_employee_id=settings.kedo_employee_id,
+        kedo_document_type_id=settings.kedo_document_type_id,
+        kedo_document_type_name=settings.kedo_document_type_name,
+        kedo_signature_types=settings.kedo_signature_types,
     )
 
 
@@ -379,6 +432,23 @@ def kontur_user(request: Request) -> KonturUserResponse:
         raise _to_http_exception(error) from error
     except httpx.HTTPError as error:
         raise HTTPException(status_code=502, detail="Kontur API is unavailable.") from error
+
+
+@app.post("/api/kedo/test-document", response_model=KedoTestDocumentResponse)
+def kedo_test_document(request: Request) -> KedoTestDocumentResponse:
+    session = _get_session(request)
+
+    try:
+        return send_test_document(
+            get_settings(),
+            access_token=session.token.access_token if session else None,
+        )
+    except KedoAuthError as error:
+        raise HTTPException(status_code=401, detail=str(error)) from error
+    except KedoApiError as error:
+        raise _to_http_exception(error) from error
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail="Kontur KEDO API is unavailable.") from error
 
 
 def _get_redirect_uri(request: Request, settings: Settings) -> str:
@@ -413,7 +483,7 @@ def _cleanup_pending_auth() -> None:
         del _PENDING_AUTH[state]
 
 
-def _to_http_exception(error: KonturApiError) -> HTTPException:
+def _to_http_exception(error: KonturApiError | KedoApiError) -> HTTPException:
     return HTTPException(
         status_code=502,
         detail={

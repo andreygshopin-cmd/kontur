@@ -29,3 +29,21 @@ services:
         sync: false
       - key: KONTUR_PASSWORD
         sync: false
+      - key: KONTUR_KEDO_BASE_URL
+        value: https://api.testkontur.ru/kedo
+      - key: KONTUR_KEDO_API_KEY
+        sync: false
+      - key: KONTUR_KEDO_ORG_ID
+        sync: false
+      - key: KONTUR_KEDO_EMPLOYEE_ID
+        sync: false
+      - key: KONTUR_KEDO_DOCUMENT_TYPE_ID
+        sync: false
+      - key: KONTUR_KEDO_DOCUMENT_TYPE_NAME
+        sync: false
+      - key: KONTUR_KEDO_SIGNATURE_TYPES
+        value: Pep,Nep
+      - key: KONTUR_KEDO_LOGIN
+        sync: false
+      - key: KONTUR_KEDO_PASSWORD
+        sync: false

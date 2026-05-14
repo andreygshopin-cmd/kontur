@@ -27,6 +27,7 @@ python -m pytest
 - `GET /auth/kontur/callback` — callback для Authorization Code Flow;
 - `GET /api/kontur/organizations` — авторизация в Контуре и получение организаций;
 - `GET /api/kontur/user` — авторизация в Контуре и получение данных пользователя;
+- `POST /api/kedo/test-document` — отправка тестового файла в Контур.КЭДО на подписание;
 - `/docs` — Swagger UI.
 
 ## Render
@@ -49,6 +50,12 @@ Environment Variables:
 - `KONTUR_APP_NAME`
 - `KONTUR_CLIENT_ID`
 - `KONTUR_CLIENT_SECRET`
+- `KONTUR_KEDO_BASE_URL`
+- `KONTUR_KEDO_API_KEY`
+- `KONTUR_KEDO_ORG_ID`
+- `KONTUR_KEDO_EMPLOYEE_ID`
+- `KONTUR_KEDO_DOCUMENT_TYPE_ID`
+- `KONTUR_KEDO_SIGNATURE_TYPES`
 
 Для тестового контура:
 
@@ -59,9 +66,18 @@ KONTUR_SCOPE=openid profile email offline_access Diadoc.PublicAPI.Staging
 KONTUR_CLIENT_ID=KOT_test
 KONTUR_CLIENT_SECRET=<API key из Кабинета интегратора>
 KONTUR_REDIRECT_URI=https://<render-service>/auth/kontur/callback
+KONTUR_KEDO_BASE_URL=https://api.testkontur.ru/kedo
+KONTUR_KEDO_API_KEY=<API key из Кабинета интегратора, если отличается от KONTUR_CLIENT_SECRET>
+KONTUR_KEDO_SIGNATURE_TYPES=Pep,Nep
 ```
 
 В Кабинете интегратора для приложения укажите такой же redirect URI.
+
+Для тестовой отправки в КЭДО можно не заполнять `KONTUR_KEDO_ORG_ID`,
+`KONTUR_KEDO_EMPLOYEE_ID` и `KONTUR_KEDO_DOCUMENT_TYPE_ID`: приложение попробует
+выбрать первую доступную организацию, сотрудника текущего пользователя и первый
+подходящий неформализованный тип документа. Для точного получателя задайте эти
+значения явно.
 
 ## Render deploy из командной строки
 

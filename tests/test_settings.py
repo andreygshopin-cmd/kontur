@@ -10,3 +10,4 @@ def test_default_base_url() -> None:
     settings = TestSettings()
 
     assert str(settings.base_url) == "https://diadoc-api.kontur.ru/"
+    assert str(settings.kedo_base_url) == "https://api.testkontur.ru/kedo"
