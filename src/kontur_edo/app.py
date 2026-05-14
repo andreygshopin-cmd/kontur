@@ -33,7 +33,8 @@ from kontur_edo.kontur_client import (
 )
 from kontur_edo.settings import Settings
 
-DEFAULT_KEDO_DOCUMENT_TYPE_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+DEFAULT_KEDO_DOCUMENT_TYPE_ID = "00000000-0000-0000-0000-000000000003"
+DEFAULT_KEDO_TEST_FILENAME = "test-kedo.pdf"
 SESSION_COOKIE_NAME = "kontur_session"
 AUTH_STATE_TTL_SECONDS = 600
 
@@ -84,6 +85,7 @@ class ConfigResponse(BaseModel):
 
 class KedoTestDocumentRequest(BaseModel):
     document_type_id: str | None = None
+    file_name: str | None = None
 
 
 @lru_cache
@@ -169,7 +171,13 @@ def index() -> str:
       <input
         id="kedo-document-type-id"
         type="text"
-        value="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        value="00000000-0000-0000-0000-000000000003"
+      >
+      <label for="kedo-test-filename">KONTUR_KEDO_TEST_FILENAME</label>
+      <input
+        id="kedo-test-filename"
+        type="text"
+        value="test-kedo.pdf"
       >
     </div>
     <section class="panel">
@@ -184,6 +192,7 @@ def index() -> str:
     const documentTypesButton = document.getElementById("load-kedo-document-types");
     const kedoButton = document.getElementById("send-kedo-test");
     const kedoDocumentTypeInput = document.getElementById("kedo-document-type-id");
+    const kedoFilenameInput = document.getElementById("kedo-test-filename");
     const loginLink = document.getElementById("login");
     const buttons = [
       organizationsButton,
@@ -385,7 +394,11 @@ def index() -> str:
 
     function getKedoDocumentTypePayload() {
       const documentTypeId = kedoDocumentTypeInput.value.trim();
-      return { document_type_id: documentTypeId || null };
+      const fileName = kedoFilenameInput.value.trim();
+      return {
+        document_type_id: documentTypeId || null,
+        file_name: fileName || null
+      };
     }
 
     async function loadData(url, onSuccess, successTitle, method = "GET", body = null) {
@@ -591,10 +604,16 @@ def kedo_test_document(
 ) -> KedoTestDocumentResponse:
     session = _get_session(request)
     raw_document_type_id = payload.document_type_id if payload else None
+    raw_file_name = payload.file_name if payload else None
     document_type_id = (
         raw_document_type_id.strip()
         if raw_document_type_id and raw_document_type_id.strip()
         else DEFAULT_KEDO_DOCUMENT_TYPE_ID
+    )
+    file_name = (
+        raw_file_name.strip()
+        if raw_file_name and raw_file_name.strip()
+        else DEFAULT_KEDO_TEST_FILENAME
     )
 
     try:
@@ -602,6 +621,7 @@ def kedo_test_document(
             get_settings(),
             access_token=session.token.access_token if session else None,
             document_type_id=document_type_id,
+            file_name=file_name,
         )
     except KedoAuthError as error:
         raise HTTPException(status_code=401, detail=str(error)) from error
