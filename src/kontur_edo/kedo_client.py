@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from kontur_edo.settings import Settings
 
@@ -53,6 +53,7 @@ class KedoDocumentType(BaseModel):
     is_default: bool = False
     is_disabled: bool = False
     is_formalized: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class KedoDocumentTypesResponse(BaseModel):
@@ -123,22 +124,11 @@ def send_test_document(
         )
         content["name"] = file_name
 
-        processed_content = _process_content(
-            client,
-            settings,
-            token,
-            api_key,
-            org_id,
-            document_type_id,
-            content,
-        )
-        processed_content["name"] = processed_content.get("name") or file_name
-
         process_payload = _build_process_payload(
             settings,
             employee_id=employee_id,
             document_type_id=document_type_id,
-            content=processed_content,
+            content=content,
         )
         processes_response = _request(
             client,
@@ -157,7 +147,7 @@ def send_test_document(
         document_type_id=document_type_id,
         file_name=file_name,
         content_location=_string_value(content, "location"),
-        processed_content_location=_string_value(processed_content, "location"),
+        processed_content_location=_string_value(content, "location"),
         process_ids=[
             process_id
             for process in raw_processes
@@ -616,6 +606,7 @@ def _normalize_document_type(item: dict[str, Any]) -> KedoDocumentType:
         is_default=bool(item.get("isDefault")),
         is_disabled=bool(item.get("isDisabled")),
         is_formalized=bool(metadata_payload.get("isFormalized")),
+        metadata=metadata_payload,
     )
 
 
