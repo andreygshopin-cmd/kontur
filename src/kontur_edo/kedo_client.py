@@ -55,6 +55,11 @@ class KedoDocumentType(BaseModel):
     is_formalized: bool = False
 
 
+class KedoDocumentTypesResponse(BaseModel):
+    org_id: str
+    document_types: list[KedoDocumentType]
+
+
 class KedoTestDocumentResponse(BaseModel):
     org_id: str
     employee_id: str
@@ -255,6 +260,30 @@ def get_organizations(settings: Settings, access_token: str) -> list[KedoOrganiz
         return _get_organizations(client, settings, access_token, api_key)
 
 
+def get_document_types(
+    settings: Settings,
+    *,
+    access_token: str | None = None,
+) -> KedoDocumentTypesResponse:
+    token = access_token or authenticate_with_password(settings)
+    api_key = _api_key(settings)
+
+    with httpx.Client(base_url=_base_url(settings), timeout=30.0) as client:
+        org_id = settings.kedo_org_id or _get_first_organization(
+            client, settings, token, api_key
+        ).id
+        document_types = _get_document_types(
+            client,
+            settings,
+            token,
+            api_key,
+            org_id,
+            include_disabled=True,
+        )
+
+    return KedoDocumentTypesResponse(org_id=org_id, document_types=document_types)
+
+
 def _get_first_organization(
     client: httpx.Client,
     settings: Settings,
@@ -320,22 +349,14 @@ def _get_document_type(
     api_key: str,
     org_id: str,
 ) -> KedoDocumentType:
-    response = _request(
+    document_types = _get_document_types(
         client,
-        "Get KEDO document types",
-        "GET",
-        _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/document-types"),
-        headers=_json_headers(access_token, api_key),
-        params={
-            "limit": 100,
-            "offset": 0,
-            "includeDeleted": False,
-            "includeDisabled": False,
-            "includeSystems": True,
-        },
+        settings,
+        access_token,
+        api_key,
+        org_id,
+        include_disabled=False,
     )
-
-    document_types = [_normalize_document_type(item) for item in _paged_result(response.json())]
     preferred_name = settings.kedo_document_type_name
     if preferred_name:
         lowered_name = preferred_name.casefold()
@@ -355,6 +376,33 @@ def _get_document_type(
         return enabled[0]
 
     raise KedoAuthError("KEDO did not return enabled document types.")
+
+
+def _get_document_types(
+    client: httpx.Client,
+    settings: Settings,
+    access_token: str,
+    api_key: str,
+    org_id: str,
+    *,
+    include_disabled: bool,
+) -> list[KedoDocumentType]:
+    response = _request(
+        client,
+        "Get KEDO document types",
+        "GET",
+        _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/document-types"),
+        headers=_json_headers(access_token, api_key),
+        params={
+            "limit": 100,
+            "offset": 0,
+            "includeDeleted": False,
+            "includeDisabled": include_disabled,
+            "includeSystems": True,
+        },
+    )
+
+    return [_normalize_document_type(item) for item in _paged_result(response.json())]
 
 
 def _upload_content(

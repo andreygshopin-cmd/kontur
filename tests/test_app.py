@@ -10,7 +10,12 @@ from kontur_edo.app import (
     UserSession,
     app,
 )
-from kontur_edo.kedo_client import KedoConnectivityResponse, KedoTestDocumentResponse
+from kontur_edo.kedo_client import (
+    KedoConnectivityResponse,
+    KedoDocumentType,
+    KedoDocumentTypesResponse,
+    KedoTestDocumentResponse,
+)
 from kontur_edo.kontur_client import (
     KonturBox,
     KonturOrganization,
@@ -57,6 +62,7 @@ def test_index_has_buttons() -> None:
     assert "Получить организации" in response.text
     assert "Получить личные данные" in response.text
     assert "Проверить КЭДО API" in response.text
+    assert "Получить типы документов КЭДО" in response.text
     assert "Отправить тестовый файл в КЭДО" in response.text
     assert DEFAULT_KEDO_DOCUMENT_TYPE_ID in response.text
 
@@ -184,6 +190,28 @@ def test_kedo_connectivity(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["tls_error"] == "TimeoutError: timed out"
+
+
+def test_kedo_document_types(monkeypatch) -> None:
+    def fake_get_kedo_document_types(_settings, *, access_token=None):
+        assert access_token is None
+        return KedoDocumentTypesResponse(
+            org_id="11111111-1111-1111-1111-111111111111",
+            document_types=[
+                KedoDocumentType(
+                    id="22222222-2222-2222-2222-222222222222",
+                    name="Тестовый документ",
+                    is_default=True,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(app_module, "get_kedo_document_types", fake_get_kedo_document_types)
+
+    response = client.get("/api/kedo/document-types")
+
+    assert response.status_code == 200
+    assert response.json()["document_types"][0]["id"] == "22222222-2222-2222-2222-222222222222"
 
 
 def _set_session_cookie() -> None:

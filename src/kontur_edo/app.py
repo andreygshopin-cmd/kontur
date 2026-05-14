@@ -12,9 +12,13 @@ from kontur_edo.kedo_client import (
     KedoApiError,
     KedoAuthError,
     KedoConnectivityResponse,
+    KedoDocumentTypesResponse,
     KedoTestDocumentResponse,
     check_connectivity,
     send_test_document,
+)
+from kontur_edo.kedo_client import (
+    get_document_types as get_kedo_document_types,
 )
 from kontur_edo.kontur_client import (
     KonturApiError,
@@ -154,6 +158,9 @@ def index() -> str:
         <button id="load-organizations">Получить организации</button>
         <button id="load-user" class="secondary">Получить личные данные</button>
         <button id="check-kedo" class="secondary">Проверить КЭДО API</button>
+        <button id="load-kedo-document-types" class="secondary">
+          Получить типы документов КЭДО
+        </button>
         <button id="send-kedo-test" class="ghost">Отправить тестовый файл в КЭДО</button>
       </div>
     </header>
@@ -174,10 +181,17 @@ def index() -> str:
     const organizationsButton = document.getElementById("load-organizations");
     const userButton = document.getElementById("load-user");
     const checkKedoButton = document.getElementById("check-kedo");
+    const documentTypesButton = document.getElementById("load-kedo-document-types");
     const kedoButton = document.getElementById("send-kedo-test");
     const kedoDocumentTypeInput = document.getElementById("kedo-document-type-id");
     const loginLink = document.getElementById("login");
-    const buttons = [organizationsButton, userButton, checkKedoButton, kedoButton];
+    const buttons = [
+      organizationsButton,
+      userButton,
+      checkKedoButton,
+      documentTypesButton,
+      kedoButton
+    ];
     const statusNode = document.getElementById("status");
     const contentNode = document.getElementById("content");
 
@@ -294,6 +308,56 @@ def index() -> str:
       `;
     }
 
+    function formatBoolean(value) {
+      return value ? "Да" : "Нет";
+    }
+
+    function bindDocumentTypeButtons() {
+      contentNode.querySelectorAll("[data-document-type-id]").forEach((button) => {
+        button.addEventListener("click", () => {
+          kedoDocumentTypeInput.value = button.dataset.documentTypeId || "";
+          statusNode.textContent = "Тип документа выбран";
+          statusNode.className = "status muted";
+        });
+      });
+    }
+
+    function renderKedoDocumentTypes(data) {
+      const rows = data.document_types.map((documentType) => `
+        <tr>
+          <td>
+            <button
+              class="secondary"
+              type="button"
+              data-document-type-id="${escapeHtml(documentType.id)}"
+            >Выбрать</button>
+          </td>
+          <td>${escapeHtml(documentType.name || "Без названия")}</td>
+          <td><code>${escapeHtml(documentType.id)}</code></td>
+          <td>${formatBoolean(documentType.is_default)}</td>
+          <td>${formatBoolean(documentType.is_disabled)}</td>
+          <td>${formatBoolean(documentType.is_formalized)}</td>
+        </tr>
+      `).join("");
+
+      contentNode.innerHTML = rows ? `
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>Тип документа</th>
+              <th>DocumentTypeId</th>
+              <th>Default</th>
+              <th>Disabled</th>
+              <th>Formalized</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      ` : `<span class="muted">Типы документов КЭДО не найдены.</span>`;
+      bindDocumentTypeButtons();
+    }
+
     async function renderConfigHint() {
       const response = await fetch("/api/config");
       const config = await response.json();
@@ -371,6 +435,12 @@ def index() -> str:
       "/api/kedo/connectivity",
       renderKedoConnectivity,
       (data) => data.tls_connected ? "KEDO API доступен" : "KEDO API не отвечает полностью"
+    ));
+
+    documentTypesButton.addEventListener("click", () => loadData(
+      "/api/kedo/document-types",
+      renderKedoDocumentTypes,
+      (data) => `Найдено типов документов КЭДО: ${data.document_types.length}`
     ));
 
     kedoButton.addEventListener("click", () => loadData(
@@ -544,6 +614,23 @@ def kedo_test_document(
 @app.get("/api/kedo/connectivity", response_model=KedoConnectivityResponse)
 def kedo_connectivity() -> KedoConnectivityResponse:
     return check_connectivity(get_settings())
+
+
+@app.get("/api/kedo/document-types", response_model=KedoDocumentTypesResponse)
+def kedo_document_types(request: Request) -> KedoDocumentTypesResponse:
+    session = _get_session(request)
+
+    try:
+        return get_kedo_document_types(
+            get_settings(),
+            access_token=session.token.access_token if session else None,
+        )
+    except KedoAuthError as error:
+        raise HTTPException(status_code=401, detail=str(error)) from error
+    except KedoApiError as error:
+        raise _to_http_exception(error) from error
+    except httpx.HTTPError as error:
+        raise _to_network_http_exception("Kontur KEDO API", error) from error
 
 
 def _get_redirect_uri(request: Request, settings: Settings) -> str:
