@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import socket
+import ssl
 from datetime import UTC, datetime
+from time import perf_counter
 from typing import Any
 from urllib.parse import urlparse
 
@@ -61,6 +64,20 @@ class KedoTestDocumentResponse(BaseModel):
     processed_content_location: str | None
     process_ids: list[str]
     raw_response: list[dict[str, Any]]
+
+
+class KedoConnectivityResponse(BaseModel):
+    url: str
+    host: str
+    port: int
+    resolved_addresses: list[str]
+    dns_error: str | None = None
+    tcp_connected: bool = False
+    tcp_error: str | None = None
+    tls_connected: bool = False
+    tls_version: str | None = None
+    tls_error: str | None = None
+    elapsed_ms: int
 
 
 def send_test_document(
@@ -137,6 +154,59 @@ def send_test_document(
             if (process_id := _string_value(process, "id")) is not None
         ],
         raw_response=raw_processes,
+    )
+
+
+def check_connectivity(settings: Settings, *, timeout: float = 10.0) -> KedoConnectivityResponse:
+    started_at = perf_counter()
+    parsed_url = urlparse(_base_url(settings))
+    host = parsed_url.hostname or ""
+    port = parsed_url.port or 443
+    resolved_addresses: list[str] = []
+    dns_error: str | None = None
+    tcp_error: str | None = None
+    tls_error: str | None = None
+    tcp_connected = False
+    tls_connected = False
+    tls_version: str | None = None
+
+    try:
+        resolved_addresses = sorted(
+            {
+                address[4][0]
+                for address in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+                if isinstance(address[4][0], str)
+            }
+        )
+    except OSError as error:
+        dns_error = f"{type(error).__name__}: {error}"
+
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as raw_socket:
+            tcp_connected = True
+            context = ssl.create_default_context()
+            with context.wrap_socket(raw_socket, server_hostname=host) as tls_socket:
+                tls_connected = True
+                tls_version = tls_socket.version()
+    except (OSError, TimeoutError, ssl.SSLError) as error:
+        error_message = f"{type(error).__name__}: {error}"
+        if tcp_connected:
+            tls_error = error_message
+        else:
+            tcp_error = error_message
+
+    return KedoConnectivityResponse(
+        url=_base_url(settings),
+        host=host,
+        port=port,
+        resolved_addresses=resolved_addresses,
+        dns_error=dns_error,
+        tcp_connected=tcp_connected,
+        tcp_error=tcp_error,
+        tls_connected=tls_connected,
+        tls_version=tls_version,
+        tls_error=tls_error,
+        elapsed_ms=round((perf_counter() - started_at) * 1000),
     )
 
 

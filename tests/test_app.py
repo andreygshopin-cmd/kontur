@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 import kontur_edo.app as app_module
 from kontur_edo.app import SESSION_COOKIE_NAME, UserSession, app
-from kontur_edo.kedo_client import KedoTestDocumentResponse
+from kontur_edo.kedo_client import KedoConnectivityResponse, KedoTestDocumentResponse
 from kontur_edo.kontur_client import (
     KonturBox,
     KonturOrganization,
@@ -51,6 +51,7 @@ def test_index_has_buttons() -> None:
     assert "Войти в Контур" in response.text
     assert "Получить организации" in response.text
     assert "Получить личные данные" in response.text
+    assert "Проверить КЭДО API" in response.text
     assert "Отправить тестовый файл в КЭДО" in response.text
 
 
@@ -152,6 +153,27 @@ def test_kedo_test_document(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["process_ids"] == ["66666666-6666-6666-6666-666666666666"]
+
+
+def test_kedo_connectivity(monkeypatch) -> None:
+    def fake_check_connectivity(_settings):
+        return KedoConnectivityResponse(
+            url="https://api.testkontur.ru/kedo",
+            host="api.testkontur.ru",
+            port=443,
+            resolved_addresses=["46.17.203.148"],
+            tcp_connected=True,
+            tls_connected=False,
+            tls_error="TimeoutError: timed out",
+            elapsed_ms=10000,
+        )
+
+    monkeypatch.setattr(app_module, "check_connectivity", fake_check_connectivity)
+
+    response = client.get("/api/kedo/connectivity")
+
+    assert response.status_code == 200
+    assert response.json()["tls_error"] == "TimeoutError: timed out"
 
 
 def _set_session_cookie() -> None:

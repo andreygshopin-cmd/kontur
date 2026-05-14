@@ -11,7 +11,9 @@ from pydantic import BaseModel
 from kontur_edo.kedo_client import (
     KedoApiError,
     KedoAuthError,
+    KedoConnectivityResponse,
     KedoTestDocumentResponse,
+    check_connectivity,
     send_test_document,
 )
 from kontur_edo.kontur_client import (
@@ -139,6 +141,7 @@ def index() -> str:
         <a href="/auth/kontur/login" class="button ghost" id="login">Войти в Контур</a>
         <button id="load-organizations">Получить организации</button>
         <button id="load-user" class="secondary">Получить личные данные</button>
+        <button id="check-kedo" class="secondary">Проверить КЭДО API</button>
         <button id="send-kedo-test" class="ghost">Отправить тестовый файл в КЭДО</button>
       </div>
     </header>
@@ -150,9 +153,10 @@ def index() -> str:
   <script>
     const organizationsButton = document.getElementById("load-organizations");
     const userButton = document.getElementById("load-user");
+    const checkKedoButton = document.getElementById("check-kedo");
     const kedoButton = document.getElementById("send-kedo-test");
     const loginLink = document.getElementById("login");
-    const buttons = [organizationsButton, userButton, kedoButton];
+    const buttons = [organizationsButton, userButton, checkKedoButton, kedoButton];
     const statusNode = document.getElementById("status");
     const contentNode = document.getElementById("content");
 
@@ -231,6 +235,24 @@ def index() -> str:
       `;
     }
 
+    function renderKedoConnectivity(data) {
+      const addresses = (data.resolved_addresses || []).join(", ");
+      const tlsStatus = data.tls_connected ? escapeHtml(data.tls_version || "OK") : "Ошибка";
+      const error = data.dns_error || data.tcp_error || data.tls_error || "";
+      contentNode.innerHTML = `
+        <div class="details">
+          <div class="label">URL</div><div><code>${escapeHtml(data.url)}</code></div>
+          <div class="label">Host</div><div><code>${escapeHtml(data.host)}</code></div>
+          <div class="label">IP</div><div><code>${escapeHtml(addresses)}</code></div>
+          <div class="label">TCP</div><div>${data.tcp_connected ? "OK" : "Ошибка"}</div>
+          <div class="label">TLS</div><div>${tlsStatus}</div>
+          <div class="label">Ошибка</div>
+          <div><code>${escapeHtml(error)}</code></div>
+          <div class="label">Время</div><div>${escapeHtml(data.elapsed_ms)} ms</div>
+        </div>
+      `;
+    }
+
     async function renderConfigHint() {
       const response = await fetch("/api/config");
       const config = await response.json();
@@ -292,6 +314,12 @@ def index() -> str:
       "/api/kontur/user",
       renderUser,
       () => "Личные данные получены"
+    ));
+
+    checkKedoButton.addEventListener("click", () => loadData(
+      "/api/kedo/connectivity",
+      renderKedoConnectivity,
+      (data) => data.tls_connected ? "KEDO API доступен" : "KEDO API не отвечает полностью"
     ));
 
     kedoButton.addEventListener("click", () => loadData(
@@ -448,7 +476,12 @@ def kedo_test_document(request: Request) -> KedoTestDocumentResponse:
     except KedoApiError as error:
         raise _to_http_exception(error) from error
     except httpx.HTTPError as error:
-        raise HTTPException(status_code=502, detail="Kontur KEDO API is unavailable.") from error
+        raise _to_network_http_exception("Kontur KEDO API", error) from error
+
+
+@app.get("/api/kedo/connectivity", response_model=KedoConnectivityResponse)
+def kedo_connectivity() -> KedoConnectivityResponse:
+    return check_connectivity(get_settings())
 
 
 def _get_redirect_uri(request: Request, settings: Settings) -> str:
@@ -490,6 +523,17 @@ def _to_http_exception(error: KonturApiError | KedoApiError) -> HTTPException:
             "stage": error.stage,
             "kontur_status_code": error.status_code,
             "message": error.response_text,
+        },
+    )
+
+
+def _to_network_http_exception(stage: str, error: httpx.HTTPError) -> HTTPException:
+    return HTTPException(
+        status_code=502,
+        detail={
+            "stage": stage,
+            "kontur_status_code": 0,
+            "message": f"{type(error).__name__}: {error}",
         },
     )
 
