@@ -29,6 +29,7 @@ from kontur_edo.kontur_client import (
 )
 from kontur_edo.settings import Settings
 
+DEFAULT_KEDO_DOCUMENT_TYPE_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 SESSION_COOKIE_NAME = "kontur_session"
 AUTH_STATE_TTL_SECONDS = 600
 
@@ -77,6 +78,10 @@ class ConfigResponse(BaseModel):
     kedo_signature_types: str
 
 
+class KedoTestDocumentRequest(BaseModel):
+    document_type_id: str | None = None
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
@@ -113,6 +118,13 @@ def index() -> str:
     button.secondary, a.secondary { background: #2563eb; }
     button.ghost, a.ghost { background: #475569; }
     button:disabled { opacity: .65; cursor: progress; }
+    .kedo-form { margin-top: 18px; display: grid; gap: 8px; max-width: 520px; }
+    label { color: #52606d; font-size: 14px; font-weight: 700; }
+    input {
+      width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1;
+      border-radius: 6px; padding: 11px 12px; font-size: 15px;
+      color: #1f2933; background: white;
+    }
     .panel { margin-top: 28px; background: white; border: 1px solid #d9dee7; border-radius: 8px; }
     .status { padding: 16px 18px; border-bottom: 1px solid #e5e9f0; font-weight: 700; }
     .content { padding: 18px; white-space: pre-line; }
@@ -145,6 +157,14 @@ def index() -> str:
         <button id="send-kedo-test" class="ghost">Отправить тестовый файл в КЭДО</button>
       </div>
     </header>
+    <div class="kedo-form">
+      <label for="kedo-document-type-id">KONTUR_KEDO_DOCUMENT_TYPE_ID</label>
+      <input
+        id="kedo-document-type-id"
+        type="text"
+        value="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+      >
+    </div>
     <section class="panel">
       <div id="status" class="status muted">Проверяем вход...</div>
       <div id="content" class="content muted">Для доступа к данным сначала войдите в Контур.</div>
@@ -155,6 +175,7 @@ def index() -> str:
     const userButton = document.getElementById("load-user");
     const checkKedoButton = document.getElementById("check-kedo");
     const kedoButton = document.getElementById("send-kedo-test");
+    const kedoDocumentTypeInput = document.getElementById("kedo-document-type-id");
     const loginLink = document.getElementById("login");
     const buttons = [organizationsButton, userButton, checkKedoButton, kedoButton];
     const statusNode = document.getElementById("status");
@@ -298,7 +319,12 @@ def index() -> str:
       loginLink.textContent = data.authenticated ? "Войти заново" : "Войти в Контур";
     }
 
-    async function loadData(url, onSuccess, successTitle, method = "GET") {
+    function getKedoDocumentTypePayload() {
+      const documentTypeId = kedoDocumentTypeInput.value.trim();
+      return { document_type_id: documentTypeId || null };
+    }
+
+    async function loadData(url, onSuccess, successTitle, method = "GET", body = null) {
       setLoading(true);
       statusNode.textContent = "Запрос в Контур...";
       statusNode.className = "status muted";
@@ -306,7 +332,12 @@ def index() -> str:
       contentNode.dataset.touched = "true";
 
       try {
-        const response = await fetch(url, { method });
+        const requestOptions = { method };
+        if (body !== null) {
+          requestOptions.headers = { "Content-Type": "application/json" };
+          requestOptions.body = JSON.stringify(body);
+        }
+        const response = await fetch(url, requestOptions);
         const data = await readResponseBody(response);
         if (response.status === 401) {
           window.location.href = "/auth/kontur/login";
@@ -347,7 +378,8 @@ def index() -> str:
       renderKedoTestDocument,
       (data) => `Тестовый файл отправлен в КЭДО. ` +
         `Процессов: ${(data.process_ids || []).length || 1}`,
-      "POST"
+      "POST",
+      getKedoDocumentTypePayload()
     ));
 
     refreshAuthStatus().catch(() => {
@@ -483,13 +515,23 @@ def kontur_user(request: Request) -> KonturUserResponse:
 
 
 @app.post("/api/kedo/test-document", response_model=KedoTestDocumentResponse)
-def kedo_test_document(request: Request) -> KedoTestDocumentResponse:
+def kedo_test_document(
+    request: Request,
+    payload: KedoTestDocumentRequest | None = None,
+) -> KedoTestDocumentResponse:
     session = _get_session(request)
+    raw_document_type_id = payload.document_type_id if payload else None
+    document_type_id = (
+        raw_document_type_id.strip()
+        if raw_document_type_id and raw_document_type_id.strip()
+        else DEFAULT_KEDO_DOCUMENT_TYPE_ID
+    )
 
     try:
         return send_test_document(
             get_settings(),
             access_token=session.token.access_token if session else None,
+            document_type_id=document_type_id,
         )
     except KedoAuthError as error:
         raise HTTPException(status_code=401, detail=str(error)) from error

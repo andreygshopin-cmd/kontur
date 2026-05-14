@@ -4,7 +4,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 import kontur_edo.app as app_module
-from kontur_edo.app import SESSION_COOKIE_NAME, UserSession, app
+from kontur_edo.app import (
+    DEFAULT_KEDO_DOCUMENT_TYPE_ID,
+    SESSION_COOKIE_NAME,
+    UserSession,
+    app,
+)
 from kontur_edo.kedo_client import KedoConnectivityResponse, KedoTestDocumentResponse
 from kontur_edo.kontur_client import (
     KonturBox,
@@ -53,6 +58,7 @@ def test_index_has_buttons() -> None:
     assert "Получить личные данные" in response.text
     assert "Проверить КЭДО API" in response.text
     assert "Отправить тестовый файл в КЭДО" in response.text
+    assert DEFAULT_KEDO_DOCUMENT_TYPE_ID in response.text
 
 
 def test_config_hides_secret_values() -> None:
@@ -134,8 +140,9 @@ def test_kontur_user(monkeypatch) -> None:
 
 
 def test_kedo_test_document(monkeypatch) -> None:
-    def fake_send_test_document(_settings, *, access_token=None):
+    def fake_send_test_document(_settings, *, access_token=None, document_type_id=None):
         assert access_token is None
+        assert document_type_id == DEFAULT_KEDO_DOCUMENT_TYPE_ID
         return KedoTestDocumentResponse(
             org_id="11111111-1111-1111-1111-111111111111",
             employee_id="22222222-2222-2222-2222-222222222222",
@@ -149,7 +156,10 @@ def test_kedo_test_document(monkeypatch) -> None:
 
     monkeypatch.setattr(app_module, "send_test_document", fake_send_test_document)
 
-    response = client.post("/api/kedo/test-document")
+    response = client.post(
+        "/api/kedo/test-document",
+        json={"document_type_id": DEFAULT_KEDO_DOCUMENT_TYPE_ID},
+    )
 
     assert response.status_code == 200
     assert response.json()["process_ids"] == ["66666666-6666-6666-6666-666666666666"]
