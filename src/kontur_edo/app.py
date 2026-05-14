@@ -182,6 +182,26 @@ def index() -> str:
       return "Ошибка запроса";
     }
 
+    async function readResponseBody(response) {
+      const text = await response.text();
+      if (!text) return null;
+      try {
+        return JSON.parse(text);
+      } catch {
+        const message = text
+          .replace(/<[^>]*>/g, " ")
+          .replace(/\\s+/g, " ")
+          .trim()
+          .slice(0, 600);
+        return {
+          detail: {
+            stage: `HTTP ${response.status}`,
+            message
+          }
+        };
+      }
+    }
+
     function renderOrganizations(data) {
       const rows = data.organizations.flatMap((org) => {
         const boxes = org.boxes.length ? org.boxes : [{ box_id: "", title: "" }];
@@ -287,12 +307,12 @@ def index() -> str:
 
       try {
         const response = await fetch(url, { method });
-        const data = await response.json();
+        const data = await readResponseBody(response);
         if (response.status === 401) {
           window.location.href = "/auth/kontur/login";
           return;
         }
-        if (!response.ok) throw new Error(formatErrorDetail(data.detail));
+        if (!response.ok) throw new Error(formatErrorDetail(data?.detail));
         statusNode.textContent = successTitle(data);
         onSuccess(data);
       } catch (error) {
