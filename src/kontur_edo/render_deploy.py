@@ -58,7 +58,10 @@ def _trigger_render_api(api_key: str, service_id: str) -> str:
 def _json_or_empty(response: httpx.Response) -> dict[str, object]:
     if not response.content:
         return {}
-    value = response.json()
+    try:
+        value = response.json()
+    except ValueError:
+        return {}
     return value if isinstance(value, dict) else {}
 
 
