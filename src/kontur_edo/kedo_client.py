@@ -278,7 +278,9 @@ def get_document_types(
             token,
             api_key,
             org_id,
-            include_disabled=True,
+            include_disabled=False,
+            include_systems=False,
+            limit=20,
         )
 
     return KedoDocumentTypesResponse(org_id=org_id, document_types=document_types)
@@ -356,6 +358,8 @@ def _get_document_type(
         api_key,
         org_id,
         include_disabled=False,
+        include_systems=False,
+        limit=50,
     )
     preferred_name = settings.kedo_document_type_name
     if preferred_name:
@@ -386,6 +390,8 @@ def _get_document_types(
     org_id: str,
     *,
     include_disabled: bool,
+    include_systems: bool,
+    limit: int,
 ) -> list[KedoDocumentType]:
     response = _request(
         client,
@@ -394,11 +400,11 @@ def _get_document_types(
         _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/document-types"),
         headers=_json_headers(access_token, api_key),
         params={
-            "limit": 100,
+            "limit": limit,
             "offset": 0,
             "includeDeleted": False,
             "includeDisabled": include_disabled,
-            "includeSystems": True,
+            "includeSystems": include_systems,
         },
     )
 
