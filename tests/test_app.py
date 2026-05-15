@@ -41,8 +41,8 @@ def test_index_has_only_kedo_controls() -> None:
     assert "Получить типы документов КЭДО" in response.text
     assert "Отправить тестовый файл в КЭДО" in response.text
     assert DEFAULT_KEDO_DOCUMENT_TYPE_ID in response.text
-    assert DEFAULT_KEDO_TEST_FILENAME in response.text
     assert 'id="kedo-file"' in response.text
+    assert "KONTUR_KEDO_TEST_FILENAME" not in response.text
     assert "Войти в Контур" not in response.text
     assert "Получить организации" not in response.text
     assert "Получить личные данные" not in response.text

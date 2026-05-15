@@ -22,7 +22,7 @@ from kontur_edo.kedo_client import (
 )
 from kontur_edo.settings import Settings
 
-DEFAULT_KEDO_DOCUMENT_TYPE_ID = "00000000-0000-0000-0000-000000000003"
+DEFAULT_KEDO_DOCUMENT_TYPE_ID = "00000000-0000-0000-0000-000000000001"
 DEFAULT_KEDO_TEST_FILENAME = "document.pdf"
 INVALID_FILENAME_CHARS = set('<>:"/\\|?*')
 
@@ -119,10 +119,8 @@ def index() -> str:
       <input
         id="kedo-document-type-id"
         type="text"
-        value="00000000-0000-0000-0000-000000000003"
+        value="00000000-0000-0000-0000-000000000001"
       >
-      <label for="kedo-test-filename">KONTUR_KEDO_TEST_FILENAME</label>
-      <input id="kedo-test-filename" type="text" value="document.pdf">
       <label for="kedo-file">Файл для отправки</label>
       <input id="kedo-file" type="file">
     </div>
@@ -138,7 +136,6 @@ def index() -> str:
     const documentTypesButton = document.getElementById("load-kedo-document-types");
     const kedoButton = document.getElementById("send-kedo-test");
     const kedoDocumentTypeInput = document.getElementById("kedo-document-type-id");
-    const kedoFilenameInput = document.getElementById("kedo-test-filename");
     const kedoFileInput = document.getElementById("kedo-file");
     const buttons = [checkKedoButton, documentTypesButton, kedoButton];
     const statusNode = document.getElementById("status");
@@ -282,16 +279,13 @@ def index() -> str:
 
     async function getKedoPayload() {
       const documentTypeId = kedoDocumentTypeInput.value.trim();
-      const fileName = kedoFilenameInput.value.trim();
       const file = kedoFileInput.files && kedoFileInput.files[0];
+      if (!file) throw new Error("Выберите файл для отправки.");
       const payload = {
         document_type_id: documentTypeId || null,
-        file_name: fileName || null
+        file_name: file.name
       };
-      if (file) {
-        payload.file_name = file.name;
-        payload.file_content_base64 = await readFileAsBase64(file);
-      }
+      payload.file_content_base64 = await readFileAsBase64(file);
       return payload;
     }
 
@@ -335,19 +329,25 @@ def index() -> str:
 
     kedoFileInput.addEventListener("change", () => {
       const file = kedoFileInput.files && kedoFileInput.files[0];
-      if (file) kedoFilenameInput.value = file.name;
+      if (file) statusNode.textContent = `Выбран файл: ${file.name}`;
     });
 
     kedoButton.addEventListener("click", async () => {
-      const payload = await getKedoPayload();
-      await loadData(
-        "/api/kedo/test-document",
-        renderKedoTestDocument,
-        (data) => `Тестовый файл отправлен в КЭДО. ` +
-          `Процессов: ${(data.process_ids || []).length || 1}`,
-        "POST",
-        payload
-      );
+      try {
+        const payload = await getKedoPayload();
+        await loadData(
+          "/api/kedo/test-document",
+          renderKedoTestDocument,
+          (data) => `Тестовый файл отправлен в КЭДО. ` +
+            `Процессов: ${(data.process_ids || []).length || 1}`,
+          "POST",
+          payload
+        );
+      } catch (error) {
+        statusNode.textContent = "Ошибка";
+        statusNode.className = "status error";
+        contentNode.textContent = error.message;
+      }
     });
 
     function renderKedoTestDocument(data) {
