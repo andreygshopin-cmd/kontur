@@ -85,6 +85,43 @@ def test_kedo_test_document(monkeypatch) -> None:
     assert response.json()["process_ids"] == ["66666666-6666-6666-6666-666666666666"]
 
 
+def test_kedo_test_document_strips_windows_path_from_file_name(monkeypatch) -> None:
+    def fake_send_test_document(
+        _settings,
+        *,
+        document_type_id=None,
+        file_name=None,
+        file_bytes=None,
+    ):
+        assert document_type_id == DEFAULT_KEDO_DOCUMENT_TYPE_ID
+        assert file_name == "test.pdf"
+        assert file_bytes == b"hello"
+        return KedoTestDocumentResponse(
+            org_id="11111111-1111-1111-1111-111111111111",
+            employee_id="22222222-2222-2222-2222-222222222222",
+            document_type_id="33333333-3333-3333-3333-333333333333",
+            file_name="test.pdf",
+            content_location="44444444-4444-4444-4444-444444444444",
+            processed_content_location="44444444-4444-4444-4444-444444444444",
+            process_ids=["66666666-6666-6666-6666-666666666666"],
+            raw_response=[{"id": "66666666-6666-6666-6666-666666666666"}],
+        )
+
+    monkeypatch.setattr(app_module, "send_test_document", fake_send_test_document)
+
+    response = client.post(
+        "/api/kedo/test-document",
+        json={
+            "document_type_id": DEFAULT_KEDO_DOCUMENT_TYPE_ID,
+            "file_name": r"D:\Codex\Kontur\TestFile\test.pdf",
+            "file_content_base64": "aGVsbG8=",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["file_name"] == "test.pdf"
+
+
 def test_kedo_test_document_rejects_invalid_file_base64() -> None:
     response = client.post(
         "/api/kedo/test-document",

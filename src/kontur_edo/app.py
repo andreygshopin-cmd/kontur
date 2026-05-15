@@ -1,6 +1,7 @@
 import base64
 import binascii
 from functools import lru_cache
+from pathlib import PurePosixPath, PureWindowsPath
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -23,6 +24,7 @@ from kontur_edo.settings import Settings
 
 DEFAULT_KEDO_DOCUMENT_TYPE_ID = "00000000-0000-0000-0000-000000000003"
 DEFAULT_KEDO_TEST_FILENAME = "document.pdf"
+INVALID_FILENAME_CHARS = set('<>:"/\\|?*')
 
 
 class HealthResponse(BaseModel):
@@ -382,7 +384,7 @@ def kedo_test_document(
     raw_document_type_id = payload.document_type_id if payload else None
     raw_file_name = payload.file_name if payload else None
     document_type_id = _non_empty_or(raw_document_type_id, DEFAULT_KEDO_DOCUMENT_TYPE_ID)
-    file_name = _non_empty_or(raw_file_name, DEFAULT_KEDO_TEST_FILENAME)
+    file_name = _safe_file_name(_non_empty_or(raw_file_name, DEFAULT_KEDO_TEST_FILENAME))
     file_bytes = _decode_file_content(payload.file_content_base64 if payload else None)
 
     try:
@@ -420,6 +422,16 @@ def kedo_document_types() -> KedoDocumentTypesResponse:
 def _non_empty_or(value: str | None, default: str) -> str:
     stripped = value.strip() if value else ""
     return stripped or default
+
+
+def _safe_file_name(value: str) -> str:
+    file_name = value.strip().replace("\x00", "")
+    file_name = PureWindowsPath(file_name).name
+    file_name = PurePosixPath(file_name).name
+    safe_file_name = "".join(
+        "_" if ord(char) < 32 or char in INVALID_FILENAME_CHARS else char for char in file_name
+    ).strip(" .")
+    return safe_file_name or DEFAULT_KEDO_TEST_FILENAME
 
 
 def _decode_file_content(file_content_base64: str | None) -> bytes | None:
