@@ -92,6 +92,7 @@ def send_test_document(
     access_token: str | None = None,
     document_type_id: str | None = None,
     file_name: str | None = None,
+    file_bytes: bytes | None = None,
 ) -> KedoTestDocumentResponse:
     token = access_token or authenticate_with_password(settings)
     api_key = _api_key(settings)
@@ -120,7 +121,7 @@ def send_test_document(
             api_key,
             org_id,
             file_name,
-            _test_document_bytes(settings, file_name),
+            file_bytes or _test_document_bytes(settings, file_name),
         )
         content["name"] = file_name
 

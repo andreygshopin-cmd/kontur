@@ -42,6 +42,7 @@ def test_index_has_only_kedo_controls() -> None:
     assert "Отправить тестовый файл в КЭДО" in response.text
     assert DEFAULT_KEDO_DOCUMENT_TYPE_ID in response.text
     assert DEFAULT_KEDO_TEST_FILENAME in response.text
+    assert 'id="kedo-file"' in response.text
     assert "Войти в Контур" not in response.text
     assert "Получить организации" not in response.text
     assert "Получить личные данные" not in response.text
@@ -53,9 +54,11 @@ def test_kedo_test_document(monkeypatch) -> None:
         *,
         document_type_id=None,
         file_name=None,
+        file_bytes=None,
     ):
         assert document_type_id == DEFAULT_KEDO_DOCUMENT_TYPE_ID
         assert file_name == DEFAULT_KEDO_TEST_FILENAME
+        assert file_bytes == b"hello"
         return KedoTestDocumentResponse(
             org_id="11111111-1111-1111-1111-111111111111",
             employee_id="22222222-2222-2222-2222-222222222222",
@@ -74,11 +77,26 @@ def test_kedo_test_document(monkeypatch) -> None:
         json={
             "document_type_id": DEFAULT_KEDO_DOCUMENT_TYPE_ID,
             "file_name": DEFAULT_KEDO_TEST_FILENAME,
+            "file_content_base64": "aGVsbG8=",
         },
     )
 
     assert response.status_code == 200
     assert response.json()["process_ids"] == ["66666666-6666-6666-6666-666666666666"]
+
+
+def test_kedo_test_document_rejects_invalid_file_base64() -> None:
+    response = client.post(
+        "/api/kedo/test-document",
+        json={
+            "document_type_id": DEFAULT_KEDO_DOCUMENT_TYPE_ID,
+            "file_name": DEFAULT_KEDO_TEST_FILENAME,
+            "file_content_base64": "not base64",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid file_content_base64."
 
 
 def test_kedo_connectivity(monkeypatch) -> None:

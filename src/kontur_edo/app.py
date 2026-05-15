@@ -1,3 +1,5 @@
+import base64
+import binascii
 from functools import lru_cache
 
 import httpx
@@ -30,6 +32,7 @@ class HealthResponse(BaseModel):
 class KedoTestDocumentRequest(BaseModel):
     document_type_id: str | None = None
     file_name: str | None = None
+    file_content_base64: str | None = None
 
 
 @lru_cache
@@ -118,6 +121,8 @@ def index() -> str:
       >
       <label for="kedo-test-filename">KONTUR_KEDO_TEST_FILENAME</label>
       <input id="kedo-test-filename" type="text" value="document.pdf">
+      <label for="kedo-file">Файл для отправки</label>
+      <input id="kedo-file" type="file">
     </div>
     <section class="panel">
       <div id="status" class="status muted">Готово к проверке КЭДО.</div>
@@ -132,6 +137,7 @@ def index() -> str:
     const kedoButton = document.getElementById("send-kedo-test");
     const kedoDocumentTypeInput = document.getElementById("kedo-document-type-id");
     const kedoFilenameInput = document.getElementById("kedo-test-filename");
+    const kedoFileInput = document.getElementById("kedo-file");
     const buttons = [checkKedoButton, documentTypesButton, kedoButton];
     const statusNode = document.getElementById("status");
     const contentNode = document.getElementById("content");
@@ -260,13 +266,31 @@ def index() -> str:
       bindDocumentTypeButtons();
     }
 
-    function getKedoPayload() {
+    function readFileAsBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result || "");
+          resolve(result.includes(",") ? result.split(",", 2)[1] : result);
+        };
+        reader.onerror = () => reject(reader.error || new Error("Не удалось прочитать файл"));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function getKedoPayload() {
       const documentTypeId = kedoDocumentTypeInput.value.trim();
       const fileName = kedoFilenameInput.value.trim();
-      return {
+      const file = kedoFileInput.files && kedoFileInput.files[0];
+      const payload = {
         document_type_id: documentTypeId || null,
         file_name: fileName || null
       };
+      if (file) {
+        payload.file_name = file.name;
+        payload.file_content_base64 = await readFileAsBase64(file);
+      }
+      return payload;
     }
 
     async function loadData(url, onSuccess, successTitle, method = "GET", body = null) {
@@ -307,14 +331,22 @@ def index() -> str:
       (data) => `Найдено типов документов КЭДО: ${data.document_types.length}`
     ));
 
-    kedoButton.addEventListener("click", () => loadData(
-      "/api/kedo/test-document",
-      renderKedoTestDocument,
-      (data) => `Тестовый файл отправлен в КЭДО. ` +
-        `Процессов: ${(data.process_ids || []).length || 1}`,
-      "POST",
-      getKedoPayload()
-    ));
+    kedoFileInput.addEventListener("change", () => {
+      const file = kedoFileInput.files && kedoFileInput.files[0];
+      if (file) kedoFilenameInput.value = file.name;
+    });
+
+    kedoButton.addEventListener("click", async () => {
+      const payload = await getKedoPayload();
+      await loadData(
+        "/api/kedo/test-document",
+        renderKedoTestDocument,
+        (data) => `Тестовый файл отправлен в КЭДО. ` +
+          `Процессов: ${(data.process_ids || []).length || 1}`,
+        "POST",
+        payload
+      );
+    });
 
     function renderKedoTestDocument(data) {
       const contentLocation = data.processed_content_location || data.content_location || "";
@@ -351,12 +383,14 @@ def kedo_test_document(
     raw_file_name = payload.file_name if payload else None
     document_type_id = _non_empty_or(raw_document_type_id, DEFAULT_KEDO_DOCUMENT_TYPE_ID)
     file_name = _non_empty_or(raw_file_name, DEFAULT_KEDO_TEST_FILENAME)
+    file_bytes = _decode_file_content(payload.file_content_base64 if payload else None)
 
     try:
         return send_test_document(
             get_settings(),
             document_type_id=document_type_id,
             file_name=file_name,
+            file_bytes=file_bytes,
         )
     except KedoAuthError as error:
         raise HTTPException(status_code=401, detail=str(error)) from error
@@ -386,6 +420,15 @@ def kedo_document_types() -> KedoDocumentTypesResponse:
 def _non_empty_or(value: str | None, default: str) -> str:
     stripped = value.strip() if value else ""
     return stripped or default
+
+
+def _decode_file_content(file_content_base64: str | None) -> bytes | None:
+    if not file_content_base64:
+        return None
+    try:
+        return base64.b64decode(file_content_base64, validate=True)
+    except binascii.Error as error:
+        raise HTTPException(status_code=400, detail="Invalid file_content_base64.") from error
 
 
 def _to_http_exception(error: KedoApiError) -> HTTPException:
