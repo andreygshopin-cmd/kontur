@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import kontur_edo.app as app_module
+import kontur_edo.kedo_client as kedo_client_module
 from kontur_edo.app import DEFAULT_KEDO_DOCUMENT_TYPE_ID, DEFAULT_KEDO_TEST_FILENAME, app
 from kontur_edo.kedo_client import (
     KedoConnectivityResponse,
@@ -14,6 +15,7 @@ from kontur_edo.kedo_client import (
     KedoSignatureTypesResponse,
     KedoTestDocumentResponse,
     _build_process_payload,
+    send_test_document,
 )
 from kontur_edo.settings import Settings
 
@@ -171,6 +173,69 @@ def test_kedo_test_document_rejects_invalid_file_base64() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Invalid file_content_base64."
+
+
+def test_send_test_document_uses_processed_content(monkeypatch) -> None:
+    process_payloads = []
+
+    class FakeClient:
+        def __init__(self, *, base_url, timeout) -> None:
+            self.base_url = base_url
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def request(self, method, url, **kwargs):
+            if url.endswith("/contents"):
+                assert method == "POST"
+                assert kwargs["content"] == b"%PDF-test"
+                return kedo_client_module.httpx.Response(
+                    200,
+                    json={"location": "upload-location"},
+                )
+            if url.endswith("/documents/process"):
+                assert method == "POST"
+                assert kwargs["json"]["content"] == {
+                    "location": "upload-location",
+                    "name": "test.pdf",
+                }
+                return kedo_client_module.httpx.Response(
+                    200,
+                    json={"content": {"location": "processed-location", "name": "processed.pdf"}},
+                )
+            if url.endswith("/processes"):
+                assert method == "POST"
+                process_payloads.append(kwargs["json"])
+                return kedo_client_module.httpx.Response(200, json=[{"id": "process-id"}])
+            raise AssertionError(f"Unexpected request URL: {url}")
+
+    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
+
+    response = send_test_document(
+        Settings(
+            _env_file=None,
+            kedo_api_key="api-key",
+            kedo_org_id="org-id",
+        ),
+        access_token="token",
+        document_type_id=DEFAULT_KEDO_DOCUMENT_TYPE_ID,
+        sender_id="sender-id",
+        employee_id="employee-id",
+        signature_type="Nep",
+        due_days=2,
+        file_name="test.pdf",
+        file_bytes=b"%PDF-test",
+    )
+
+    process_document = process_payloads[0]["processes"][0]["documents"]["1"]
+    assert process_document["content"]["location"] == "processed-location"
+    assert process_document["content"]["name"] == "processed.pdf"
+    assert response.content_location == "upload-location"
+    assert response.processed_content_location == "processed-location"
 
 
 def test_kedo_connectivity(monkeypatch) -> None:

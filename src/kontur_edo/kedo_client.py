@@ -135,16 +135,27 @@ def send_test_document(
             api_key,
             org_id,
             file_name,
-            file_bytes or _test_document_bytes(settings, file_name),
+            file_bytes if file_bytes is not None else _test_document_bytes(settings, file_name),
         )
         content["name"] = file_name
+
+        processed_content = _process_content(
+            client,
+            settings,
+            token,
+            api_key,
+            org_id,
+            document_type_id,
+            content,
+        )
+        processed_content["name"] = processed_content.get("name") or file_name
 
         process_payload = _build_process_payload(
             settings,
             sender_id=sender_id,
             employee_id=employee_id,
             document_type_id=document_type_id,
-            content=content,
+            content=processed_content,
             signature_type=signature_type,
             due_days=due_days,
         )
@@ -165,7 +176,7 @@ def send_test_document(
         document_type_id=document_type_id,
         file_name=file_name,
         content_location=_string_value(content, "location"),
-        processed_content_location=_string_value(content, "location"),
+        processed_content_location=_string_value(processed_content, "location"),
         process_ids=[
             process_id
             for process in raw_processes
