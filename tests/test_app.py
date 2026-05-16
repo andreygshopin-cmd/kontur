@@ -42,6 +42,9 @@ def test_index_has_only_kedo_controls() -> None:
 
     assert response.status_code == 200
     assert "Проверить КЭДО API" in response.text
+    assert "Фильтр типов документов" in response.text
+    assert 'id="kedo-document-type-filter"' in response.text
+    assert "Несчастн" in response.text
     assert "Получить типы документов КЭДО" in response.text
     assert "Получить сотрудников" in response.text
     assert "Получить типы подписи" in response.text
@@ -213,6 +216,32 @@ def test_kedo_document_types(monkeypatch) -> None:
     assert response.json()["document_types"][0]["metadata"] == {"fileNamePattern": "*.pdf"}
 
 
+def test_kedo_document_types_filters_by_name(monkeypatch) -> None:
+    def fake_get_kedo_document_types(_settings):
+        return KedoDocumentTypesResponse(
+            org_id="11111111-1111-1111-1111-111111111111",
+            document_types=[
+                KedoDocumentType(
+                    id="22222222-2222-2222-2222-222222222222",
+                    name="Несчастный случай",
+                ),
+                KedoDocumentType(
+                    id="33333333-3333-3333-3333-333333333333",
+                    name="Кадровый документ",
+                ),
+            ],
+        )
+
+    monkeypatch.setattr(app_module, "get_kedo_document_types", fake_get_kedo_document_types)
+
+    response = client.get("/api/kedo/document-types", params={"filter": "Несчастн"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["document_types"]) == 1
+    assert payload["document_types"][0]["name"] == "Несчастный случай"
+
+
 def test_kedo_employees(monkeypatch) -> None:
     def fake_get_kedo_employees(_settings):
         return KedoEmployeesResponse(
@@ -265,6 +294,7 @@ def test_build_process_payload_has_sender_and_sign_step() -> None:
 
     assert route["type"] == "NoAction"
     assert route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
+    assert route["allowedTypes"] == ["Nep"]
     assert sign_route["type"] == "Sign"
     assert sign_route["target"]["id"] == "22222222-2222-2222-2222-222222222222"
     assert sign_route["allowedTypes"] == ["Nep"]

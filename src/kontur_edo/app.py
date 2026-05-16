@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import PurePosixPath, PureWindowsPath
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -12,6 +12,7 @@ from kontur_edo.kedo_client import (
     KedoApiError,
     KedoAuthError,
     KedoConnectivityResponse,
+    KedoDocumentType,
     KedoDocumentTypesResponse,
     KedoEmployeesResponse,
     KedoSignatureTypesResponse,
@@ -77,6 +78,8 @@ def index() -> str:
     header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
     h1 { margin: 0; font-size: 28px; line-height: 1.2; }
     .actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+    .action-field { display: grid; gap: 4px; min-width: 180px; }
+    .action-field input { padding: 10px 12px; }
     button {
       border: 0; border-radius: 6px; background: #0f766e; color: white;
       padding: 12px 18px; font-size: 16px; cursor: pointer; text-decoration: none;
@@ -120,6 +123,10 @@ def index() -> str:
       <h1>Контур КЭДО</h1>
       <div class="actions">
         <button id="check-kedo" class="secondary">Проверить КЭДО API</button>
+        <label class="action-field" for="kedo-document-type-filter">
+          Фильтр типов документов
+          <input id="kedo-document-type-filter" type="text" value="Несчастн">
+        </label>
         <button id="load-kedo-document-types" class="secondary">
           Получить типы документов КЭДО
         </button>
@@ -155,6 +162,7 @@ def index() -> str:
   </main>
   <script>
     const checkKedoButton = document.getElementById("check-kedo");
+    const documentTypeFilterInput = document.getElementById("kedo-document-type-filter");
     const documentTypesButton = document.getElementById("load-kedo-document-types");
     const employeesButton = document.getElementById("load-kedo-employees");
     const signatureTypesButton = document.getElementById("load-kedo-signature-types");
@@ -440,6 +448,12 @@ def index() -> str:
       }
     }
 
+    function documentTypesUrl() {
+      const filter = documentTypeFilterInput.value.trim();
+      const query = filter ? `?filter=${encodeURIComponent(filter)}` : "";
+      return `/api/kedo/document-types${query}`;
+    }
+
     checkKedoButton.addEventListener("click", () => loadData(
       "/api/kedo/connectivity",
       renderKedoConnectivity,
@@ -447,7 +461,7 @@ def index() -> str:
     ));
 
     documentTypesButton.addEventListener("click", () => loadData(
-      "/api/kedo/document-types",
+      documentTypesUrl(),
       renderKedoDocumentTypes,
       (data) => `Найдено типов документов КЭДО: ${data.document_types.length}`
     ));
@@ -556,15 +570,30 @@ def kedo_connectivity() -> KedoConnectivityResponse:
 
 
 @app.get("/api/kedo/document-types", response_model=KedoDocumentTypesResponse)
-def kedo_document_types() -> KedoDocumentTypesResponse:
+def kedo_document_types(
+    filter_text: str | None = Query(default=None, alias="filter"),
+) -> KedoDocumentTypesResponse:
     try:
-        return get_kedo_document_types(get_settings())
+        response = get_kedo_document_types(get_settings())
     except KedoAuthError as error:
         raise HTTPException(status_code=401, detail=str(error)) from error
     except KedoApiError as error:
         raise _to_http_exception(error) from error
     except httpx.HTTPError as error:
         raise _to_network_http_exception("Kontur KEDO API", error) from error
+
+    normalized_filter = filter_text.strip().casefold() if filter_text else ""
+    if not normalized_filter:
+        return response
+
+    return KedoDocumentTypesResponse(
+        org_id=response.org_id,
+        document_types=[
+            document_type
+            for document_type in response.document_types
+            if _document_type_matches_filter(document_type, normalized_filter)
+        ],
+    )
 
 
 @app.get("/api/kedo/employees", response_model=KedoEmployeesResponse)
@@ -592,6 +621,11 @@ def _non_empty_or(value: str | None, default: str) -> str:
 def _non_empty(value: str | None) -> str | None:
     stripped = value.strip() if value else ""
     return stripped or None
+
+
+def _document_type_matches_filter(document_type: KedoDocumentType, filter_text: str) -> bool:
+    haystack = f"{document_type.id} {document_type.name or ''} {document_type.metadata}".casefold()
+    return filter_text in haystack
 
 
 def _safe_file_name(value: str) -> str:

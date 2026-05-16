@@ -647,6 +647,7 @@ def _build_process_payload(
                 "route": {
                     "type": "NoAction",
                     "target": sender_target,
+                    "allowedTypes": signature_types,
                     "next": sign_route,
                 },
             }
