@@ -259,7 +259,7 @@ def test_send_test_document_uses_processed_content(monkeypatch) -> None:
                 )
             if url.endswith("/processes"):
                 assert method == "POST"
-                assert "/api/v2/" in url
+                assert "/api/v1/" in url
                 process_payloads.append(kwargs["json"])
                 return kedo_client_module.httpx.Response(200, json=[{"id": "process-id"}])
             if url.endswith("/processes/process-id"):
@@ -547,28 +547,26 @@ def test_build_process_payload_has_sender_and_sign_step() -> None:
     )
 
     route = payload["processes"][0]["route"]
-    sender_sign_route = route["next"]
-    sign_route = sender_sign_route["next"]
+    sign_route = route["next"]
 
     assert route["type"] == "NoAction"
     UUID(route["id"])
     assert route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
+    assert route["comment"] is None
     assert "allowedTypes" not in route
     assert "documentKeys" not in route
-    assert sender_sign_route["type"] == "Sign"
-    UUID(sender_sign_route["id"])
-    assert sender_sign_route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
-    assert sender_sign_route["allowedTypes"] == ["Nep"]
-    assert sender_sign_route["documentKeys"] == [1]
     assert sign_route["type"] == "Sign"
     UUID(sign_route["id"])
     assert sign_route["target"]["id"] == "22222222-2222-2222-2222-222222222222"
     assert sign_route["allowedTypes"] == ["Nep"]
     assert sign_route["documentKeys"] == [1]
-    assert sign_route["deadline"] == {"relativeDeadlineAt": 3}
+    assert sign_route["allowedActions"] == ["Admission"]
+    assert sign_route["next"] is None
+    assert sign_route["comment"] is None
+    assert sign_route["deadlineAt"] is None
 
 
-def test_build_process_payload_keeps_second_step_for_same_sender_and_signer() -> None:
+def test_build_process_payload_uses_single_sign_step_for_same_sender_and_signer() -> None:
     payload = _build_process_payload(
         Settings(_env_file=None),
         sender_id="11111111-1111-1111-1111-111111111111",
@@ -580,16 +578,13 @@ def test_build_process_payload_keeps_second_step_for_same_sender_and_signer() ->
     )
 
     route = payload["processes"][0]["route"]
-    sender_sign_route = route["next"]
-    sign_route = sender_sign_route["next"]
+    sign_route = route["next"]
 
     assert route["type"] == "NoAction"
     assert route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
-    assert sender_sign_route["type"] == "Sign"
-    assert sender_sign_route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
-    assert sender_sign_route["allowedTypes"] == ["Pep"]
-    assert sender_sign_route["documentKeys"] == [1]
     assert sign_route["type"] == "Sign"
     assert sign_route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
     assert sign_route["allowedTypes"] == ["Pep"]
     assert sign_route["documentKeys"] == [1]
+    assert sign_route["allowedActions"] == ["Admission"]
+    assert sign_route["next"] is None

@@ -677,9 +677,15 @@ def _safe_file_name_part(value: str) -> str:
 
 
 def _is_kedo_file_name_char(char: str) -> bool:
-    if ord(char) < 32 or char in INVALID_FILENAME_CHARS:
-        return False
-    return char == "_" or char.isalnum()
+    return (
+        char == "_"
+        or "0" <= char <= "9"
+        or "A" <= char <= "Z"
+        or "a" <= char <= "z"
+        or "А" <= char <= "Я"
+        or "а" <= char <= "я"
+        or char in {"Ё", "ё"}
+    )
 
 
 def _decode_file_content(file_content_base64: str | None) -> bytes | None:

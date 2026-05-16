@@ -168,7 +168,7 @@ def send_test_document(
             client,
             "Create KEDO signing process",
             "POST",
-            _api_path(settings, f"/kedo/api/v2/orgs/{org_id}/processes"),
+            _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/processes"),
             params={"flat": False},
             headers=_json_headers(token, api_key),
             json=process_payload,
@@ -737,34 +737,25 @@ def _build_process_payload(
     due_days: int | None,
 ) -> dict[str, Any]:
     signature_types = [signature_type] if signature_type else _signature_types(settings)
-    safe_due_days = max(due_days or 1, 1)
     sender_target = {"type": "Employee", "id": sender_id}
     signer_target = {"type": "Employee", "id": employee_id}
     signer_route = {
-        "type": "Sign",
-        "id": str(uuid4()),
         "target": signer_target,
         "documentKeys": [1],
         "allowedTypes": signature_types,
-        "allowedActions": ["Admission", "Rejection"],
-        "deadline": {
-            "relativeDeadlineAt": safe_due_days,
-        },
-    }
-    sender_sign_route = {
+        "allowedActions": ["Admission"],
         "type": "Sign",
         "id": str(uuid4()),
-        "target": sender_target,
-        "documentKeys": [1],
-        "allowedTypes": signature_types,
-        "allowedActions": ["Admission", "Rejection"],
-        "next": signer_route,
+        "next": None,
+        "comment": None,
+        "deadlineAt": None,
     }
     sender_route = {
         "type": "NoAction",
         "id": str(uuid4()),
         "target": sender_target,
-        "next": sender_sign_route,
+        "next": signer_route,
+        "comment": None,
     }
 
     return {
@@ -797,7 +788,7 @@ def _get_created_process_details(
             client,
             "Get KEDO signing process",
             "GET",
-            _api_path(settings, f"/kedo/api/v2/orgs/{org_id}/processes/{process_id}"),
+            _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/processes/{process_id}"),
             headers=_json_headers(access_token, api_key),
             params={"flat": False, "includeCandidateTargets": False},
         )
