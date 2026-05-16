@@ -494,8 +494,12 @@ def index() -> str:
         await loadData(
           "/api/kedo/test-document",
           renderKedoTestDocument,
-          (data) => `Тестовый файл отправлен в КЭДО. ` +
-            `Процессов: ${(data.process_ids || []).length || 1}`,
+          (data) => {
+            const processCount = (data.process_ids || []).length || 1;
+            const documentCount = (data.document_ids || []).length;
+            return `Тестовый файл отправлен в КЭДО. ` +
+              `Процессов: ${processCount}, документов: ${documentCount}`;
+          },
           "POST",
           payload
         );
@@ -511,6 +515,7 @@ def index() -> str:
       const processedContentLocation = data.processed_content_location || "";
       const rawResponse = JSON.stringify(data.raw_response || [], null, 2);
       const requestPayload = JSON.stringify(data.request_payload || {}, null, 2);
+      const processDetails = JSON.stringify(data.process_details || [], null, 2);
       contentNode.innerHTML = `
         <div class="details">
           <div class="label">Организация</div><div><code>${escapeHtml(data.org_id)}</code></div>
@@ -524,10 +529,14 @@ def index() -> str:
           <div><code>${escapeHtml(processedContentLocation)}</code></div>
           <div class="label">Process ID</div>
           <div><code>${escapeHtml((data.process_ids || []).join(", "))}</code></div>
+          <div class="label">Document ID</div>
+          <div><code>${escapeHtml((data.document_ids || []).join(", "))}</code></div>
           <div class="label">Запрос процесса</div>
           <pre class="json-block"><code>${escapeHtml(requestPayload)}</code></pre>
           <div class="label">Ответ КЭДО</div>
           <pre class="json-block"><code>${escapeHtml(rawResponse)}</code></pre>
+          <div class="label">Проверка процесса</div>
+          <pre class="json-block"><code>${escapeHtml(processDetails)}</code></pre>
         </div>
       `;
     }

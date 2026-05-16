@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import ssl
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from time import perf_counter, sleep
 from typing import Any
@@ -79,8 +80,10 @@ class KedoTestDocumentResponse(BaseModel):
     content_location: str | None
     processed_content_location: str | None
     process_ids: list[str]
+    document_ids: list[str] = Field(default_factory=list)
     raw_response: list[dict[str, Any]]
     request_payload: dict[str, Any] | None = None
+    process_details: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class KedoConnectivityResponse(BaseModel):
@@ -165,13 +168,40 @@ def send_test_document(
             client,
             "Create KEDO signing process",
             "POST",
-            _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/processes"),
+            _api_path(settings, f"/kedo/api/v2/orgs/{org_id}/processes"),
             params={"flat": False},
             headers=_json_headers(token, api_key),
             json=process_payload,
         )
 
-    raw_processes = _as_object_list(processes_response.json())
+        raw_processes = _as_object_list(processes_response.json())
+        process_ids = _process_ids(raw_processes)
+        process_details = _get_created_process_details(
+            client,
+            settings,
+            token,
+            api_key,
+            org_id,
+            process_ids,
+        )
+
+    validated_processes = process_details or raw_processes
+    document_ids = _process_document_ids(validated_processes)
+    if not document_ids:
+        raise KedoApiError(
+            "Validate KEDO signing process",
+            502,
+            "Created process does not contain documents.",
+        )
+
+    draft_document_ids = _draft_document_ids(validated_processes)
+    if draft_document_ids:
+        raise KedoApiError(
+            "Validate KEDO signing process",
+            422,
+            f"Created document is still a draft: {', '.join(draft_document_ids)}.",
+        )
+
     return KedoTestDocumentResponse(
         org_id=org_id,
         employee_id=employee_id,
@@ -179,13 +209,11 @@ def send_test_document(
         file_name=file_name,
         content_location=_string_value(content, "location"),
         processed_content_location=_string_value(processed_content, "location"),
-        process_ids=[
-            process_id
-            for process in raw_processes
-            if (process_id := _string_value(process, "id")) is not None
-        ],
+        process_ids=process_ids,
+        document_ids=document_ids,
         raw_response=raw_processes,
         request_payload=process_payload,
+        process_details=process_details,
     )
 
 
@@ -753,6 +781,76 @@ def _build_process_payload(
             }
         ]
     }
+
+
+def _get_created_process_details(
+    client: httpx.Client,
+    settings: Settings,
+    access_token: str,
+    api_key: str,
+    org_id: str,
+    process_ids: list[str],
+) -> list[dict[str, Any]]:
+    details: list[dict[str, Any]] = []
+    for process_id in process_ids:
+        response = _request(
+            client,
+            "Get KEDO signing process",
+            "GET",
+            _api_path(settings, f"/kedo/api/v2/orgs/{org_id}/processes/{process_id}"),
+            headers=_json_headers(access_token, api_key),
+            params={"flat": False, "includeCandidateTargets": False},
+        )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise KedoApiError(
+                "Get KEDO signing process",
+                502,
+                "Unexpected non-object process response.",
+            )
+        details.append(dict(payload))
+    return details
+
+
+def _process_ids(processes: list[dict[str, Any]]) -> list[str]:
+    return [
+        process_id
+        for process in processes
+        if (process_id := _string_value(process, "id")) is not None
+    ]
+
+
+def _process_document_ids(processes: list[dict[str, Any]]) -> list[str]:
+    document_ids: list[str] = []
+    for document in _iter_process_documents(processes):
+        document_id = _string_value(document, "id")
+        if document_id:
+            document_ids.append(document_id)
+    return document_ids
+
+
+def _draft_document_ids(processes: list[dict[str, Any]]) -> list[str]:
+    draft_ids: list[str] = []
+    for document in _iter_process_documents(processes):
+        if document.get("isDraft") is not True:
+            continue
+        draft_ids.append(_string_value(document, "id") or str(document.get("documentKey") or "?"))
+    return draft_ids
+
+
+def _iter_process_documents(processes: list[dict[str, Any]]) -> Iterable[dict[str, Any]]:
+    for process in processes:
+        documents = process.get("documents")
+        if isinstance(documents, dict):
+            for document in documents.values():
+                if isinstance(document, dict):
+                    yield document
+
+        flat_documents = process.get("flatDocuments")
+        if isinstance(flat_documents, list):
+            for document in flat_documents:
+                if isinstance(document, dict):
+                    yield document
 
 
 def _signature_types(settings: Settings) -> list[str]:
