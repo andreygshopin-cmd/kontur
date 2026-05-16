@@ -41,6 +41,7 @@ class HealthResponse(BaseModel):
 
 class KedoTestDocumentRequest(BaseModel):
     document_type_id: str | None = None
+    sender_id: str | None = None
     employee_id: str | None = None
     signature_type: str | None = None
     due_days: int | None = None
@@ -134,6 +135,8 @@ def index() -> str:
         type="text"
         value="00000000-0000-0000-0000-000000000001"
       >
+      <label for="kedo-sender-id">Отправитель</label>
+      <input id="kedo-sender-id" type="text" placeholder="Выберите отправителя">
       <label for="kedo-employee-id">Участник подписания</label>
       <input id="kedo-employee-id" type="text" placeholder="Выберите сотрудника">
       <label for="kedo-signature-type">Тип подписи</label>
@@ -157,6 +160,7 @@ def index() -> str:
     const signatureTypesButton = document.getElementById("load-kedo-signature-types");
     const kedoButton = document.getElementById("send-kedo-test");
     const kedoDocumentTypeInput = document.getElementById("kedo-document-type-id");
+    const kedoSenderInput = document.getElementById("kedo-sender-id");
     const kedoEmployeeInput = document.getElementById("kedo-employee-id");
     const kedoSignatureTypeInput = document.getElementById("kedo-signature-type");
     const kedoDueDaysInput = document.getElementById("kedo-due-days");
@@ -255,8 +259,9 @@ def index() -> str:
     function bindEmployeeButtons() {
       contentNode.querySelectorAll("[data-employee-id]").forEach((button) => {
         button.addEventListener("click", () => {
+          kedoSenderInput.value = button.dataset.employeeId || "";
           kedoEmployeeInput.value = button.dataset.employeeId || "";
-          statusNode.textContent = "Участник подписания выбран";
+          statusNode.textContent = "Отправитель и участник подписания выбраны";
           statusNode.className = "status muted";
         });
       });
@@ -391,6 +396,7 @@ def index() -> str:
 
     async function getKedoPayload() {
       const documentTypeId = kedoDocumentTypeInput.value.trim();
+      const senderId = kedoSenderInput.value.trim();
       const employeeId = kedoEmployeeInput.value.trim();
       const signatureType = kedoSignatureTypeInput.value.trim();
       const dueDays = Number.parseInt(kedoDueDaysInput.value, 10);
@@ -398,6 +404,7 @@ def index() -> str:
       if (!file) throw new Error("Выберите файл для отправки.");
       const payload = {
         document_type_id: documentTypeId || null,
+        sender_id: senderId || null,
         employee_id: employeeId || null,
         signature_type: signatureType || null,
         due_days: Number.isFinite(dueDays) && dueDays > 0 ? dueDays : 1,
@@ -512,10 +519,12 @@ def kedo_test_document(
     payload: KedoTestDocumentRequest | None = None,
 ) -> KedoTestDocumentResponse:
     raw_document_type_id = payload.document_type_id if payload else None
+    raw_sender_id = payload.sender_id if payload else None
     raw_employee_id = payload.employee_id if payload else None
     raw_signature_type = payload.signature_type if payload else None
     raw_file_name = payload.file_name if payload else None
     document_type_id = _non_empty_or(raw_document_type_id, DEFAULT_KEDO_DOCUMENT_TYPE_ID)
+    sender_id = _non_empty(raw_sender_id)
     employee_id = _non_empty(raw_employee_id)
     signature_type = _non_empty(raw_signature_type)
     due_days = max(payload.due_days or 1, 1) if payload else 1
@@ -526,6 +535,7 @@ def kedo_test_document(
         return send_test_document(
             get_settings(),
             document_type_id=document_type_id,
+            sender_id=sender_id,
             employee_id=employee_id,
             signature_type=signature_type,
             due_days=due_days,

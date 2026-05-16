@@ -100,6 +100,7 @@ def send_test_document(
     *,
     access_token: str | None = None,
     document_type_id: str | None = None,
+    sender_id: str | None = None,
     employee_id: str | None = None,
     signature_type: str | None = None,
     due_days: int | None = None,
@@ -116,6 +117,7 @@ def send_test_document(
         employee_id = employee_id or settings.kedo_employee_id or _get_current_employee(
             client, settings, token, api_key, org_id
         ).id
+        sender_id = sender_id or employee_id
         document_type_id = document_type_id or settings.kedo_document_type_id
         document_type_id = document_type_id or _get_document_type(
             client,
@@ -139,6 +141,7 @@ def send_test_document(
 
         process_payload = _build_process_payload(
             settings,
+            sender_id=sender_id,
             employee_id=employee_id,
             document_type_id=document_type_id,
             content=content,
@@ -337,9 +340,9 @@ def get_document_types(
             token,
             api_key,
             org_id,
-            include_disabled=False,
-            include_systems=False,
-            limit=20,
+            include_disabled=True,
+            include_systems=True,
+            page_size=100,
         )
 
     return KedoDocumentTypesResponse(org_id=org_id, document_types=document_types)
@@ -477,7 +480,7 @@ def _get_document_type(
         org_id,
         include_disabled=False,
         include_systems=False,
-        limit=50,
+        page_size=50,
     )
     preferred_name = settings.kedo_document_type_name
     if preferred_name:
@@ -509,24 +512,31 @@ def _get_document_types(
     *,
     include_disabled: bool,
     include_systems: bool,
-    limit: int,
+    page_size: int,
 ) -> list[KedoDocumentType]:
-    response = _request(
-        client,
-        "Get KEDO document types",
-        "GET",
-        _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/document-types"),
-        headers=_json_headers(access_token, api_key),
-        params={
-            "limit": limit,
-            "offset": 0,
-            "includeDeleted": False,
-            "includeDisabled": include_disabled,
-            "includeSystems": include_systems,
-        },
-    )
+    document_types: list[KedoDocumentType] = []
+    offset = 0
+    while True:
+        response = _request(
+            client,
+            "Get KEDO document types",
+            "GET",
+            _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/document-types"),
+            headers=_json_headers(access_token, api_key),
+            params={
+                "limit": page_size,
+                "offset": offset,
+                "includeDeleted": False,
+                "includeDisabled": include_disabled,
+                "includeSystems": include_systems,
+            },
+        )
 
-    return [_normalize_document_type(item) for item in _paged_result(response.json())]
+        page = [_normalize_document_type(item) for item in _paged_result(response.json())]
+        document_types.extend(page)
+        if len(page) < page_size:
+            return document_types
+        offset += page_size
 
 
 def _upload_content(
@@ -601,6 +611,7 @@ def _process_content(
 def _build_process_payload(
     settings: Settings,
     *,
+    sender_id: str,
     employee_id: str,
     document_type_id: str,
     content: dict[str, Any],
@@ -609,10 +620,11 @@ def _build_process_payload(
 ) -> dict[str, Any]:
     signature_types = [signature_type] if signature_type else _signature_types(settings)
     safe_due_days = max(due_days or 1, 1)
-    target = {"type": "Employee", "id": employee_id}
+    sender_target = {"type": "Employee", "id": sender_id}
+    signer_target = {"type": "Employee", "id": employee_id}
     sign_route = {
         "type": "Sign",
-        "target": target,
+        "target": signer_target,
         "documentKeys": [1],
         "allowedTypes": signature_types,
         "allowedActions": ["Admission", "Rejection"],
@@ -632,7 +644,11 @@ def _build_process_payload(
                         "content": content,
                     },
                 },
-                "route": sign_route,
+                "route": {
+                    "type": "NoAction",
+                    "target": sender_target,
+                    "next": sign_route,
+                },
             }
         ]
     }

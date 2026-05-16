@@ -13,6 +13,7 @@ from kontur_edo.kedo_client import (
     KedoEmployeesResponse,
     KedoSignatureTypesResponse,
     KedoTestDocumentResponse,
+    _build_process_payload,
 )
 from kontur_edo.settings import Settings
 
@@ -46,6 +47,8 @@ def test_index_has_only_kedo_controls() -> None:
     assert "Получить типы подписи" in response.text
     assert "Отправить тестовый файл в КЭДО" in response.text
     assert DEFAULT_KEDO_DOCUMENT_TYPE_ID in response.text
+    assert "Отправитель" in response.text
+    assert 'id="kedo-sender-id"' in response.text
     assert "Участник подписания" in response.text
     assert 'id="kedo-employee-id"' in response.text
     assert "Срок выполнения, календарные дни" in response.text
@@ -64,6 +67,7 @@ def test_kedo_test_document(monkeypatch) -> None:
         _settings,
         *,
         document_type_id=None,
+        sender_id=None,
         employee_id=None,
         signature_type=None,
         due_days=None,
@@ -71,6 +75,7 @@ def test_kedo_test_document(monkeypatch) -> None:
         file_bytes=None,
     ):
         assert document_type_id == DEFAULT_KEDO_DOCUMENT_TYPE_ID
+        assert sender_id == "11111111-1111-1111-1111-111111111111"
         assert employee_id == "22222222-2222-2222-2222-222222222222"
         assert signature_type == "Pep"
         assert due_days == 1
@@ -93,6 +98,7 @@ def test_kedo_test_document(monkeypatch) -> None:
         "/api/kedo/test-document",
         json={
             "document_type_id": DEFAULT_KEDO_DOCUMENT_TYPE_ID,
+            "sender_id": "11111111-1111-1111-1111-111111111111",
             "employee_id": "22222222-2222-2222-2222-222222222222",
             "signature_type": "Pep",
             "due_days": 1,
@@ -110,6 +116,7 @@ def test_kedo_test_document_strips_windows_path_from_file_name(monkeypatch) -> N
         _settings,
         *,
         document_type_id=None,
+        sender_id=None,
         employee_id=None,
         signature_type=None,
         due_days=None,
@@ -117,6 +124,7 @@ def test_kedo_test_document_strips_windows_path_from_file_name(monkeypatch) -> N
         file_bytes=None,
     ):
         assert document_type_id == DEFAULT_KEDO_DOCUMENT_TYPE_ID
+        assert sender_id is None
         assert employee_id is None
         assert signature_type is None
         assert due_days == 1
@@ -239,3 +247,25 @@ def test_kedo_signature_types(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"signature_types": ["Pep", "Nep"]}
+
+
+def test_build_process_payload_has_sender_and_sign_step() -> None:
+    payload = _build_process_payload(
+        Settings(_env_file=None),
+        sender_id="11111111-1111-1111-1111-111111111111",
+        employee_id="22222222-2222-2222-2222-222222222222",
+        document_type_id="33333333-3333-3333-3333-333333333333",
+        content={"location": "content-location", "name": "test.pdf"},
+        signature_type="Nep",
+        due_days=3,
+    )
+
+    route = payload["processes"][0]["route"]
+    sign_route = route["next"]
+
+    assert route["type"] == "NoAction"
+    assert route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
+    assert sign_route["type"] == "Sign"
+    assert sign_route["target"]["id"] == "22222222-2222-2222-2222-222222222222"
+    assert sign_route["allowedTypes"] == ["Nep"]
+    assert sign_route["deadline"] == {"type": "CalendarDays", "days": 3}
