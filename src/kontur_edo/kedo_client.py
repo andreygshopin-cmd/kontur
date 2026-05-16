@@ -52,6 +52,10 @@ class KedoEmployeesResponse(BaseModel):
     employees: list[KedoEmployee]
 
 
+class KedoSignatureTypesResponse(BaseModel):
+    signature_types: list[str]
+
+
 class KedoDocumentType(BaseModel):
     id: str
     name: str | None = None
@@ -97,6 +101,8 @@ def send_test_document(
     access_token: str | None = None,
     document_type_id: str | None = None,
     employee_id: str | None = None,
+    signature_type: str | None = None,
+    due_days: int | None = None,
     file_name: str | None = None,
     file_bytes: bytes | None = None,
 ) -> KedoTestDocumentResponse:
@@ -136,6 +142,8 @@ def send_test_document(
             employee_id=employee_id,
             document_type_id=document_type_id,
             content=content,
+            signature_type=signature_type,
+            due_days=due_days,
         )
         processes_response = _request(
             client,
@@ -362,6 +370,10 @@ def get_employees(
         ]
 
     return KedoEmployeesResponse(org_id=org_id, employees=employees)
+
+
+def get_signature_types(settings: Settings) -> KedoSignatureTypesResponse:
+    return KedoSignatureTypesResponse(signature_types=_signature_types(settings))
 
 
 def _get_first_organization(
@@ -592,13 +604,23 @@ def _build_process_payload(
     employee_id: str,
     document_type_id: str,
     content: dict[str, Any],
+    signature_type: str | None,
+    due_days: int | None,
 ) -> dict[str, Any]:
-    signature_types = [
-        signature_type.strip()
-        for signature_type in settings.kedo_signature_types.split(",")
-        if signature_type.strip()
-    ] or ["Pep"]
+    signature_types = [signature_type] if signature_type else _signature_types(settings)
+    safe_due_days = max(due_days or 1, 1)
     target = {"type": "Employee", "id": employee_id}
+    sign_route = {
+        "type": "Sign",
+        "target": target,
+        "documentKeys": [1],
+        "allowedTypes": signature_types,
+        "allowedActions": ["Admission", "Rejection"],
+        "deadline": {
+            "type": "CalendarDays",
+            "days": safe_due_days,
+        },
+    }
 
     return {
         "processes": [
@@ -610,20 +632,18 @@ def _build_process_payload(
                         "content": content,
                     },
                 },
-                "route": {
-                    "type": "NoAction",
-                    "target": target,
-                    "next": {
-                        "type": "Sign",
-                        "target": target,
-                        "documentKeys": [1],
-                        "allowedTypes": signature_types,
-                        "allowedActions": ["Admission", "Rejection"],
-                    },
-                },
+                "route": sign_route,
             }
         ]
     }
+
+
+def _signature_types(settings: Settings) -> list[str]:
+    return [
+        signature_type.strip()
+        for signature_type in settings.kedo_signature_types.split(",")
+        if signature_type.strip()
+    ] or ["Pep"]
 
 
 def _normalize_organization(item: dict[str, Any]) -> KedoOrganization:

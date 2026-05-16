@@ -14,6 +14,7 @@ from kontur_edo.kedo_client import (
     KedoConnectivityResponse,
     KedoDocumentTypesResponse,
     KedoEmployeesResponse,
+    KedoSignatureTypesResponse,
     KedoTestDocumentResponse,
     check_connectivity,
     send_test_document,
@@ -23,6 +24,9 @@ from kontur_edo.kedo_client import (
 )
 from kontur_edo.kedo_client import (
     get_employees as get_kedo_employees,
+)
+from kontur_edo.kedo_client import (
+    get_signature_types as get_kedo_signature_types,
 )
 from kontur_edo.settings import Settings
 
@@ -38,6 +42,8 @@ class HealthResponse(BaseModel):
 class KedoTestDocumentRequest(BaseModel):
     document_type_id: str | None = None
     employee_id: str | None = None
+    signature_type: str | None = None
+    due_days: int | None = None
     file_name: str | None = None
     file_content_base64: str | None = None
 
@@ -117,6 +123,7 @@ def index() -> str:
           Получить типы документов КЭДО
         </button>
         <button id="load-kedo-employees" class="secondary">Получить сотрудников</button>
+        <button id="load-kedo-signature-types" class="secondary">Получить типы подписи</button>
         <button id="send-kedo-test" class="ghost">Отправить тестовый файл в КЭДО</button>
       </div>
     </header>
@@ -129,6 +136,10 @@ def index() -> str:
       >
       <label for="kedo-employee-id">Участник подписания</label>
       <input id="kedo-employee-id" type="text" placeholder="Выберите сотрудника">
+      <label for="kedo-signature-type">Тип подписи</label>
+      <input id="kedo-signature-type" type="text" value="Pep">
+      <label for="kedo-due-days">Срок выполнения, календарные дни</label>
+      <input id="kedo-due-days" type="number" min="1" step="1" value="1">
       <label for="kedo-file">Файл для отправки</label>
       <input id="kedo-file" type="file">
     </div>
@@ -143,11 +154,20 @@ def index() -> str:
     const checkKedoButton = document.getElementById("check-kedo");
     const documentTypesButton = document.getElementById("load-kedo-document-types");
     const employeesButton = document.getElementById("load-kedo-employees");
+    const signatureTypesButton = document.getElementById("load-kedo-signature-types");
     const kedoButton = document.getElementById("send-kedo-test");
     const kedoDocumentTypeInput = document.getElementById("kedo-document-type-id");
     const kedoEmployeeInput = document.getElementById("kedo-employee-id");
+    const kedoSignatureTypeInput = document.getElementById("kedo-signature-type");
+    const kedoDueDaysInput = document.getElementById("kedo-due-days");
     const kedoFileInput = document.getElementById("kedo-file");
-    const buttons = [checkKedoButton, documentTypesButton, employeesButton, kedoButton];
+    const buttons = [
+      checkKedoButton,
+      documentTypesButton,
+      employeesButton,
+      signatureTypesButton,
+      kedoButton
+    ];
     const statusNode = document.getElementById("status");
     const contentNode = document.getElementById("content");
 
@@ -242,6 +262,16 @@ def index() -> str:
       });
     }
 
+    function bindSignatureTypeButtons() {
+      contentNode.querySelectorAll("[data-signature-type]").forEach((button) => {
+        button.addEventListener("click", () => {
+          kedoSignatureTypeInput.value = button.dataset.signatureType || "";
+          statusNode.textContent = "Тип подписи выбран";
+          statusNode.className = "status muted";
+        });
+      });
+    }
+
     function metadataText(documentType) {
       const metadata = documentType.metadata || {};
       return Object.keys(metadata).length ? JSON.stringify(metadata, null, 2) : "";
@@ -319,6 +349,34 @@ def index() -> str:
       bindEmployeeButtons();
     }
 
+    function renderKedoSignatureTypes(data) {
+      const rows = data.signature_types.map((signatureType) => `
+        <tr>
+          <td>
+            <button
+              class="secondary"
+              type="button"
+              data-signature-type="${escapeHtml(signatureType)}"
+            >Выбрать</button>
+          </td>
+          <td><code>${escapeHtml(signatureType)}</code></td>
+        </tr>
+      `).join("");
+
+      contentNode.innerHTML = rows ? `
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>Тип подписи</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      ` : `<span class="muted">Типы подписи не найдены.</span>`;
+      bindSignatureTypeButtons();
+    }
+
     function readFileAsBase64(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -334,11 +392,15 @@ def index() -> str:
     async function getKedoPayload() {
       const documentTypeId = kedoDocumentTypeInput.value.trim();
       const employeeId = kedoEmployeeInput.value.trim();
+      const signatureType = kedoSignatureTypeInput.value.trim();
+      const dueDays = Number.parseInt(kedoDueDaysInput.value, 10);
       const file = kedoFileInput.files && kedoFileInput.files[0];
       if (!file) throw new Error("Выберите файл для отправки.");
       const payload = {
         document_type_id: documentTypeId || null,
         employee_id: employeeId || null,
+        signature_type: signatureType || null,
+        due_days: Number.isFinite(dueDays) && dueDays > 0 ? dueDays : 1,
         file_name: file.name
       };
       payload.file_content_base64 = await readFileAsBase64(file);
@@ -387,6 +449,12 @@ def index() -> str:
       "/api/kedo/employees",
       renderKedoEmployees,
       (data) => `Найдено сотрудников КЭДО: ${data.employees.length}`
+    ));
+
+    signatureTypesButton.addEventListener("click", () => loadData(
+      "/api/kedo/signature-types",
+      renderKedoSignatureTypes,
+      (data) => `Найдено типов подписи: ${data.signature_types.length}`
     ));
 
     kedoFileInput.addEventListener("change", () => {
@@ -445,9 +513,12 @@ def kedo_test_document(
 ) -> KedoTestDocumentResponse:
     raw_document_type_id = payload.document_type_id if payload else None
     raw_employee_id = payload.employee_id if payload else None
+    raw_signature_type = payload.signature_type if payload else None
     raw_file_name = payload.file_name if payload else None
     document_type_id = _non_empty_or(raw_document_type_id, DEFAULT_KEDO_DOCUMENT_TYPE_ID)
     employee_id = _non_empty(raw_employee_id)
+    signature_type = _non_empty(raw_signature_type)
+    due_days = max(payload.due_days or 1, 1) if payload else 1
     file_name = _safe_file_name(_non_empty_or(raw_file_name, DEFAULT_KEDO_TEST_FILENAME))
     file_bytes = _decode_file_content(payload.file_content_base64 if payload else None)
 
@@ -456,6 +527,8 @@ def kedo_test_document(
             get_settings(),
             document_type_id=document_type_id,
             employee_id=employee_id,
+            signature_type=signature_type,
+            due_days=due_days,
             file_name=file_name,
             file_bytes=file_bytes,
         )
@@ -494,6 +567,11 @@ def kedo_employees() -> KedoEmployeesResponse:
         raise _to_http_exception(error) from error
     except httpx.HTTPError as error:
         raise _to_network_http_exception("Kontur KEDO API", error) from error
+
+
+@app.get("/api/kedo/signature-types", response_model=KedoSignatureTypesResponse)
+def kedo_signature_types() -> KedoSignatureTypesResponse:
+    return get_kedo_signature_types(get_settings())
 
 
 def _non_empty_or(value: str | None, default: str) -> str:

@@ -11,6 +11,7 @@ from kontur_edo.kedo_client import (
     KedoDocumentTypesResponse,
     KedoEmployee,
     KedoEmployeesResponse,
+    KedoSignatureTypesResponse,
     KedoTestDocumentResponse,
 )
 from kontur_edo.settings import Settings
@@ -42,10 +43,15 @@ def test_index_has_only_kedo_controls() -> None:
     assert "Проверить КЭДО API" in response.text
     assert "Получить типы документов КЭДО" in response.text
     assert "Получить сотрудников" in response.text
+    assert "Получить типы подписи" in response.text
     assert "Отправить тестовый файл в КЭДО" in response.text
     assert DEFAULT_KEDO_DOCUMENT_TYPE_ID in response.text
     assert "Участник подписания" in response.text
     assert 'id="kedo-employee-id"' in response.text
+    assert "Срок выполнения, календарные дни" in response.text
+    assert 'id="kedo-due-days"' in response.text
+    assert "Тип подписи" in response.text
+    assert 'id="kedo-signature-type"' in response.text
     assert 'id="kedo-file"' in response.text
     assert "KONTUR_KEDO_TEST_FILENAME" not in response.text
     assert "Войти в Контур" not in response.text
@@ -59,11 +65,15 @@ def test_kedo_test_document(monkeypatch) -> None:
         *,
         document_type_id=None,
         employee_id=None,
+        signature_type=None,
+        due_days=None,
         file_name=None,
         file_bytes=None,
     ):
         assert document_type_id == DEFAULT_KEDO_DOCUMENT_TYPE_ID
         assert employee_id == "22222222-2222-2222-2222-222222222222"
+        assert signature_type == "Pep"
+        assert due_days == 1
         assert file_name == DEFAULT_KEDO_TEST_FILENAME
         assert file_bytes == b"hello"
         return KedoTestDocumentResponse(
@@ -84,6 +94,8 @@ def test_kedo_test_document(monkeypatch) -> None:
         json={
             "document_type_id": DEFAULT_KEDO_DOCUMENT_TYPE_ID,
             "employee_id": "22222222-2222-2222-2222-222222222222",
+            "signature_type": "Pep",
+            "due_days": 1,
             "file_name": DEFAULT_KEDO_TEST_FILENAME,
             "file_content_base64": "aGVsbG8=",
         },
@@ -99,11 +111,15 @@ def test_kedo_test_document_strips_windows_path_from_file_name(monkeypatch) -> N
         *,
         document_type_id=None,
         employee_id=None,
+        signature_type=None,
+        due_days=None,
         file_name=None,
         file_bytes=None,
     ):
         assert document_type_id == DEFAULT_KEDO_DOCUMENT_TYPE_ID
         assert employee_id is None
+        assert signature_type is None
+        assert due_days == 1
         assert file_name == "test.pdf"
         assert file_bytes == b"hello"
         return KedoTestDocumentResponse(
@@ -210,3 +226,16 @@ def test_kedo_employees(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["employees"][0]["id"] == "22222222-2222-2222-2222-222222222222"
+
+
+def test_kedo_signature_types(monkeypatch) -> None:
+    monkeypatch.setattr(
+        app_module,
+        "get_kedo_signature_types",
+        lambda _settings: KedoSignatureTypesResponse(signature_types=["Pep", "Nep"]),
+    )
+
+    response = client.get("/api/kedo/signature-types")
+
+    assert response.status_code == 200
+    assert response.json() == {"signature_types": ["Pep", "Nep"]}
