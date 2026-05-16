@@ -9,6 +9,8 @@ from kontur_edo.kedo_client import (
     KedoConnectivityResponse,
     KedoDocumentType,
     KedoDocumentTypesResponse,
+    KedoEmployee,
+    KedoEmployeesResponse,
     KedoTestDocumentResponse,
 )
 from kontur_edo.settings import Settings
@@ -39,8 +41,11 @@ def test_index_has_only_kedo_controls() -> None:
     assert response.status_code == 200
     assert "Проверить КЭДО API" in response.text
     assert "Получить типы документов КЭДО" in response.text
+    assert "Получить сотрудников" in response.text
     assert "Отправить тестовый файл в КЭДО" in response.text
     assert DEFAULT_KEDO_DOCUMENT_TYPE_ID in response.text
+    assert "Участник подписания" in response.text
+    assert 'id="kedo-employee-id"' in response.text
     assert 'id="kedo-file"' in response.text
     assert "KONTUR_KEDO_TEST_FILENAME" not in response.text
     assert "Войти в Контур" not in response.text
@@ -53,10 +58,12 @@ def test_kedo_test_document(monkeypatch) -> None:
         _settings,
         *,
         document_type_id=None,
+        employee_id=None,
         file_name=None,
         file_bytes=None,
     ):
         assert document_type_id == DEFAULT_KEDO_DOCUMENT_TYPE_ID
+        assert employee_id == "22222222-2222-2222-2222-222222222222"
         assert file_name == DEFAULT_KEDO_TEST_FILENAME
         assert file_bytes == b"hello"
         return KedoTestDocumentResponse(
@@ -76,6 +83,7 @@ def test_kedo_test_document(monkeypatch) -> None:
         "/api/kedo/test-document",
         json={
             "document_type_id": DEFAULT_KEDO_DOCUMENT_TYPE_ID,
+            "employee_id": "22222222-2222-2222-2222-222222222222",
             "file_name": DEFAULT_KEDO_TEST_FILENAME,
             "file_content_base64": "aGVsbG8=",
         },
@@ -90,10 +98,12 @@ def test_kedo_test_document_strips_windows_path_from_file_name(monkeypatch) -> N
         _settings,
         *,
         document_type_id=None,
+        employee_id=None,
         file_name=None,
         file_bytes=None,
     ):
         assert document_type_id == DEFAULT_KEDO_DOCUMENT_TYPE_ID
+        assert employee_id is None
         assert file_name == "test.pdf"
         assert file_bytes == b"hello"
         return KedoTestDocumentResponse(
@@ -177,3 +187,26 @@ def test_kedo_document_types(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["document_types"][0]["metadata"] == {"fileNamePattern": "*.pdf"}
+
+
+def test_kedo_employees(monkeypatch) -> None:
+    def fake_get_kedo_employees(_settings):
+        return KedoEmployeesResponse(
+            org_id="11111111-1111-1111-1111-111111111111",
+            employees=[
+                KedoEmployee(
+                    id="22222222-2222-2222-2222-222222222222",
+                    org_id="11111111-1111-1111-1111-111111111111",
+                    user_id="33333333-3333-3333-3333-333333333333",
+                    full_name="Иван Иванов",
+                    login="ivan@example.com",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(app_module, "get_kedo_employees", fake_get_kedo_employees)
+
+    response = client.get("/api/kedo/employees")
+
+    assert response.status_code == 200
+    assert response.json()["employees"][0]["id"] == "22222222-2222-2222-2222-222222222222"

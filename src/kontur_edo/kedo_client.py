@@ -47,6 +47,11 @@ class KedoEmployee(BaseModel):
     login: str | None = None
 
 
+class KedoEmployeesResponse(BaseModel):
+    org_id: str
+    employees: list[KedoEmployee]
+
+
 class KedoDocumentType(BaseModel):
     id: str
     name: str | None = None
@@ -91,6 +96,7 @@ def send_test_document(
     *,
     access_token: str | None = None,
     document_type_id: str | None = None,
+    employee_id: str | None = None,
     file_name: str | None = None,
     file_bytes: bytes | None = None,
 ) -> KedoTestDocumentResponse:
@@ -101,7 +107,7 @@ def send_test_document(
         org_id = settings.kedo_org_id or _get_first_organization(
             client, settings, token, api_key
         ).id
-        employee_id = settings.kedo_employee_id or _get_current_employee(
+        employee_id = employee_id or settings.kedo_employee_id or _get_current_employee(
             client, settings, token, api_key, org_id
         ).id
         document_type_id = document_type_id or settings.kedo_document_type_id
@@ -331,6 +337,33 @@ def get_document_types(
     return KedoDocumentTypesResponse(org_id=org_id, document_types=document_types)
 
 
+def get_employees(
+    settings: Settings,
+    *,
+    access_token: str | None = None,
+) -> KedoEmployeesResponse:
+    token = access_token or authenticate_with_password(settings)
+    api_key = _api_key(settings)
+
+    with httpx.Client(base_url=_base_url(settings), timeout=30.0) as client:
+        org_id = settings.kedo_org_id or _get_first_organization(
+            client, settings, token, api_key
+        ).id
+        try:
+            employees = _get_organization_employees(client, settings, token, api_key, org_id)
+        except KedoApiError as error:
+            if error.status_code != 404:
+                raise
+            employees = _get_current_user_employees(client, settings, token, api_key)
+        employees = [
+            employee
+            for employee in employees
+            if employee.org_id is None or employee.org_id == org_id
+        ]
+
+    return KedoEmployeesResponse(org_id=org_id, employees=employees)
+
+
 def _get_first_organization(
     client: httpx.Client,
     settings: Settings,
@@ -369,6 +402,23 @@ def _get_current_employee(
     api_key: str,
     org_id: str,
 ) -> KedoEmployee:
+    employees = _get_current_user_employees(client, settings, access_token, api_key)
+    for employee in employees:
+        if employee.org_id == org_id:
+            return employee
+
+    if employees:
+        return employees[0]
+
+    raise KedoAuthError("KEDO did not return an employee for the current user.")
+
+
+def _get_current_user_employees(
+    client: httpx.Client,
+    settings: Settings,
+    access_token: str,
+    api_key: str,
+) -> list[KedoEmployee]:
     response = _request(
         client,
         "Get KEDO current user employees",
@@ -378,15 +428,26 @@ def _get_current_employee(
         params={"limit": 100, "offset": 0, "includeDeleted": False, "includeOccupations": True},
     )
 
-    employees = [_normalize_employee(item) for item in _paged_result(response.json())]
-    for employee in employees:
-        if employee.org_id == org_id:
-            return employee
+    return [_normalize_employee(item) for item in _paged_result(response.json())]
 
-    if employees:
-        return employees[0]
 
-    raise KedoAuthError("KEDO did not return an employee for the current user.")
+def _get_organization_employees(
+    client: httpx.Client,
+    settings: Settings,
+    access_token: str,
+    api_key: str,
+    org_id: str,
+) -> list[KedoEmployee]:
+    response = _request(
+        client,
+        "Get KEDO organization employees",
+        "GET",
+        _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/employees"),
+        headers=_json_headers(access_token, api_key),
+        params={"limit": 100, "offset": 0, "includeDeleted": False, "includeOccupations": True},
+    )
+
+    return [_normalize_employee(item) for item in _paged_result(response.json())]
 
 
 def _get_document_type(

@@ -13,12 +13,16 @@ from kontur_edo.kedo_client import (
     KedoAuthError,
     KedoConnectivityResponse,
     KedoDocumentTypesResponse,
+    KedoEmployeesResponse,
     KedoTestDocumentResponse,
     check_connectivity,
     send_test_document,
 )
 from kontur_edo.kedo_client import (
     get_document_types as get_kedo_document_types,
+)
+from kontur_edo.kedo_client import (
+    get_employees as get_kedo_employees,
 )
 from kontur_edo.settings import Settings
 
@@ -33,6 +37,7 @@ class HealthResponse(BaseModel):
 
 class KedoTestDocumentRequest(BaseModel):
     document_type_id: str | None = None
+    employee_id: str | None = None
     file_name: str | None = None
     file_content_base64: str | None = None
 
@@ -111,6 +116,7 @@ def index() -> str:
         <button id="load-kedo-document-types" class="secondary">
           Получить типы документов КЭДО
         </button>
+        <button id="load-kedo-employees" class="secondary">Получить сотрудников</button>
         <button id="send-kedo-test" class="ghost">Отправить тестовый файл в КЭДО</button>
       </div>
     </header>
@@ -121,6 +127,8 @@ def index() -> str:
         type="text"
         value="00000000-0000-0000-0000-000000000001"
       >
+      <label for="kedo-employee-id">Участник подписания</label>
+      <input id="kedo-employee-id" type="text" placeholder="Выберите сотрудника">
       <label for="kedo-file">Файл для отправки</label>
       <input id="kedo-file" type="file">
     </div>
@@ -134,10 +142,12 @@ def index() -> str:
   <script>
     const checkKedoButton = document.getElementById("check-kedo");
     const documentTypesButton = document.getElementById("load-kedo-document-types");
+    const employeesButton = document.getElementById("load-kedo-employees");
     const kedoButton = document.getElementById("send-kedo-test");
     const kedoDocumentTypeInput = document.getElementById("kedo-document-type-id");
+    const kedoEmployeeInput = document.getElementById("kedo-employee-id");
     const kedoFileInput = document.getElementById("kedo-file");
-    const buttons = [checkKedoButton, documentTypesButton, kedoButton];
+    const buttons = [checkKedoButton, documentTypesButton, employeesButton, kedoButton];
     const statusNode = document.getElementById("status");
     const contentNode = document.getElementById("content");
 
@@ -222,6 +232,16 @@ def index() -> str:
       });
     }
 
+    function bindEmployeeButtons() {
+      contentNode.querySelectorAll("[data-employee-id]").forEach((button) => {
+        button.addEventListener("click", () => {
+          kedoEmployeeInput.value = button.dataset.employeeId || "";
+          statusNode.textContent = "Участник подписания выбран";
+          statusNode.className = "status muted";
+        });
+      });
+    }
+
     function metadataText(documentType) {
       const metadata = documentType.metadata || {};
       return Object.keys(metadata).length ? JSON.stringify(metadata, null, 2) : "";
@@ -265,6 +285,40 @@ def index() -> str:
       bindDocumentTypeButtons();
     }
 
+    function renderKedoEmployees(data) {
+      const rows = data.employees.map((employee) => `
+        <tr>
+          <td>
+            <button
+              class="secondary"
+              type="button"
+              data-employee-id="${escapeHtml(employee.id)}"
+            >Выбрать</button>
+          </td>
+          <td>${escapeHtml(employee.full_name || employee.login || "Без имени")}</td>
+          <td><code>${escapeHtml(employee.id)}</code></td>
+          <td><code>${escapeHtml(employee.user_id || "")}</code></td>
+          <td>${escapeHtml(employee.login || "")}</td>
+        </tr>
+      `).join("");
+
+      contentNode.innerHTML = rows ? `
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>Сотрудник</th>
+              <th>EmployeeId</th>
+              <th>UserId</th>
+              <th>Login</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      ` : `<span class="muted">Сотрудники КЭДО не найдены.</span>`;
+      bindEmployeeButtons();
+    }
+
     function readFileAsBase64(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -279,10 +333,12 @@ def index() -> str:
 
     async function getKedoPayload() {
       const documentTypeId = kedoDocumentTypeInput.value.trim();
+      const employeeId = kedoEmployeeInput.value.trim();
       const file = kedoFileInput.files && kedoFileInput.files[0];
       if (!file) throw new Error("Выберите файл для отправки.");
       const payload = {
         document_type_id: documentTypeId || null,
+        employee_id: employeeId || null,
         file_name: file.name
       };
       payload.file_content_base64 = await readFileAsBase64(file);
@@ -325,6 +381,12 @@ def index() -> str:
       "/api/kedo/document-types",
       renderKedoDocumentTypes,
       (data) => `Найдено типов документов КЭДО: ${data.document_types.length}`
+    ));
+
+    employeesButton.addEventListener("click", () => loadData(
+      "/api/kedo/employees",
+      renderKedoEmployees,
+      (data) => `Найдено сотрудников КЭДО: ${data.employees.length}`
     ));
 
     kedoFileInput.addEventListener("change", () => {
@@ -382,8 +444,10 @@ def kedo_test_document(
     payload: KedoTestDocumentRequest | None = None,
 ) -> KedoTestDocumentResponse:
     raw_document_type_id = payload.document_type_id if payload else None
+    raw_employee_id = payload.employee_id if payload else None
     raw_file_name = payload.file_name if payload else None
     document_type_id = _non_empty_or(raw_document_type_id, DEFAULT_KEDO_DOCUMENT_TYPE_ID)
+    employee_id = _non_empty(raw_employee_id)
     file_name = _safe_file_name(_non_empty_or(raw_file_name, DEFAULT_KEDO_TEST_FILENAME))
     file_bytes = _decode_file_content(payload.file_content_base64 if payload else None)
 
@@ -391,6 +455,7 @@ def kedo_test_document(
         return send_test_document(
             get_settings(),
             document_type_id=document_type_id,
+            employee_id=employee_id,
             file_name=file_name,
             file_bytes=file_bytes,
         )
@@ -419,9 +484,26 @@ def kedo_document_types() -> KedoDocumentTypesResponse:
         raise _to_network_http_exception("Kontur KEDO API", error) from error
 
 
+@app.get("/api/kedo/employees", response_model=KedoEmployeesResponse)
+def kedo_employees() -> KedoEmployeesResponse:
+    try:
+        return get_kedo_employees(get_settings())
+    except KedoAuthError as error:
+        raise HTTPException(status_code=401, detail=str(error)) from error
+    except KedoApiError as error:
+        raise _to_http_exception(error) from error
+    except httpx.HTTPError as error:
+        raise _to_network_http_exception("Kontur KEDO API", error) from error
+
+
 def _non_empty_or(value: str | None, default: str) -> str:
     stripped = value.strip() if value else ""
     return stripped or default
+
+
+def _non_empty(value: str | None) -> str | None:
+    stripped = value.strip() if value else ""
+    return stripped or None
 
 
 def _safe_file_name(value: str) -> str:
