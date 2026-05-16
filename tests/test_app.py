@@ -419,7 +419,7 @@ def test_build_process_payload_has_sender_and_sign_step() -> None:
     assert sign_route["deadline"] == {"relativeDeadlineAt": 3}
 
 
-def test_build_process_payload_does_not_duplicate_same_sender_and_signer() -> None:
+def test_build_process_payload_keeps_second_step_for_same_sender_and_signer() -> None:
     payload = _build_process_payload(
         Settings(_env_file=None),
         sender_id="11111111-1111-1111-1111-111111111111",
@@ -431,9 +431,13 @@ def test_build_process_payload_does_not_duplicate_same_sender_and_signer() -> No
     )
 
     route = payload["processes"][0]["route"]
+    sign_route = route["next"]
 
     assert route["type"] == "Sign"
     assert route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
     assert route["allowedTypes"] == ["Pep"]
     assert route["documentKeys"] == [1]
-    assert "next" not in route
+    assert sign_route["type"] == "Sign"
+    assert sign_route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
+    assert sign_route["allowedTypes"] == ["Pep"]
+    assert sign_route["documentKeys"] == [1]

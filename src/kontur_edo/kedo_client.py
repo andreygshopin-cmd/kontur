@@ -721,9 +721,8 @@ def _build_process_payload(
         "documentKeys": [1],
         "allowedTypes": signature_types,
         "allowedActions": ["Admission", "Rejection"],
+        "next": signer_route,
     }
-    if sender_id != employee_id:
-        sender_route["next"] = signer_route
 
     return {
         "processes": [
