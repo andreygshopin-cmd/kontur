@@ -34,6 +34,7 @@ from kontur_edo.settings import Settings
 DEFAULT_KEDO_DOCUMENT_TYPE_ID = "00000000-0000-0000-0000-000000000001"
 DEFAULT_KEDO_TEST_FILENAME = "document.pdf"
 INVALID_FILENAME_CHARS = set('<>:"/\\|?*')
+DEFAULT_KEDO_FILE_EXTENSION = "pdf"
 
 
 class HealthResponse(BaseModel):
@@ -632,10 +633,31 @@ def _safe_file_name(value: str) -> str:
     file_name = value.strip().replace("\x00", "")
     file_name = PureWindowsPath(file_name).name
     file_name = PurePosixPath(file_name).name
-    safe_file_name = "".join(
-        "_" if ord(char) < 32 or char in INVALID_FILENAME_CHARS else char for char in file_name
-    ).strip(" .")
-    return safe_file_name or DEFAULT_KEDO_TEST_FILENAME
+    parts = [part for part in file_name.split(".") if part]
+    if not parts:
+        return DEFAULT_KEDO_TEST_FILENAME
+
+    extension = "".join(char for char in parts[-1].casefold() if char.isascii() and char.isalnum())
+    if len(extension) not in {3, 4}:
+        extension = DEFAULT_KEDO_FILE_EXTENSION
+
+    name_parts = parts[:-1] or [parts[0]]
+    safe_parts = [_safe_file_name_part(part) for part in name_parts]
+    safe_name = ".".join(part for part in safe_parts if part).strip("._")
+    return f"{safe_name or 'document'}.{extension}"
+
+
+def _safe_file_name_part(value: str) -> str:
+    safe_part = "".join(
+        char if _is_kedo_file_name_char(char) else "_" for char in value.strip(" .")
+    ).strip("_")
+    return safe_part[:250]
+
+
+def _is_kedo_file_name_char(char: str) -> bool:
+    if ord(char) < 32 or char in INVALID_FILENAME_CHARS:
+        return False
+    return char == "_" or char.isalnum()
 
 
 def _decode_file_content(file_content_base64: str | None) -> bytes | None:

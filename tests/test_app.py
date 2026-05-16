@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -159,6 +160,45 @@ def test_kedo_test_document_strips_windows_path_from_file_name(monkeypatch) -> N
 
     assert response.status_code == 200
     assert response.json()["file_name"] == "test.pdf"
+
+
+def test_kedo_test_document_normalizes_file_name_for_kedo(monkeypatch) -> None:
+    def fake_send_test_document(
+        _settings,
+        *,
+        document_type_id=None,
+        sender_id=None,
+        employee_id=None,
+        signature_type=None,
+        due_days=None,
+        file_name=None,
+        file_bytes=None,
+    ):
+        assert file_name == "test_kedo.pdf"
+        return KedoTestDocumentResponse(
+            org_id="11111111-1111-1111-1111-111111111111",
+            employee_id="22222222-2222-2222-2222-222222222222",
+            document_type_id=document_type_id or DEFAULT_KEDO_DOCUMENT_TYPE_ID,
+            file_name=file_name,
+            content_location="44444444-4444-4444-4444-444444444444",
+            processed_content_location="44444444-4444-4444-4444-444444444444",
+            process_ids=["66666666-6666-6666-6666-666666666666"],
+            raw_response=[{"id": "66666666-6666-6666-6666-666666666666"}],
+        )
+
+    monkeypatch.setattr(app_module, "send_test_document", fake_send_test_document)
+
+    response = client.post(
+        "/api/kedo/test-document",
+        json={
+            "document_type_id": DEFAULT_KEDO_DOCUMENT_TYPE_ID,
+            "file_name": "test-kedo.pdf",
+            "file_content_base64": "aGVsbG8=",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["file_name"] == "test_kedo.pdf"
 
 
 def test_kedo_test_document_rejects_invalid_file_base64() -> None:
@@ -366,12 +406,34 @@ def test_build_process_payload_has_sender_and_sign_step() -> None:
     route = payload["processes"][0]["route"]
     sign_route = route["next"]
 
-    assert route["type"] == "NoAction"
+    assert route["type"] == "Sign"
+    UUID(route["id"])
     assert route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
-    assert "allowedTypes" not in route
-    assert "documentKeys" not in route
+    assert route["allowedTypes"] == ["Nep"]
+    assert route["documentKeys"] == [1]
     assert sign_route["type"] == "Sign"
+    UUID(sign_route["id"])
     assert sign_route["target"]["id"] == "22222222-2222-2222-2222-222222222222"
     assert sign_route["allowedTypes"] == ["Nep"]
     assert sign_route["documentKeys"] == [1]
     assert sign_route["deadline"] == {"relativeDeadlineAt": 3}
+
+
+def test_build_process_payload_does_not_duplicate_same_sender_and_signer() -> None:
+    payload = _build_process_payload(
+        Settings(_env_file=None),
+        sender_id="11111111-1111-1111-1111-111111111111",
+        employee_id="11111111-1111-1111-1111-111111111111",
+        document_type_id="33333333-3333-3333-3333-333333333333",
+        content={"location": "content-location", "name": "test.pdf"},
+        signature_type="Pep",
+        due_days=3,
+    )
+
+    route = payload["processes"][0]["route"]
+
+    assert route["type"] == "Sign"
+    assert route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
+    assert route["allowedTypes"] == ["Pep"]
+    assert route["documentKeys"] == [1]
+    assert "next" not in route

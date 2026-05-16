@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from time import perf_counter, sleep
 from typing import Any
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import httpx
 from pydantic import BaseModel, Field
@@ -618,7 +619,10 @@ def _process_content(
     if isinstance(error_type, str) and error_type:
         raise KedoApiError("Process KEDO document content", 422, error_type)
 
-    processed_content = payload.get("content") or content
+    processed_content = payload.get("content")
+    if not isinstance(processed_content, dict) and _string_value(payload, "location") is not None:
+        processed_content = payload
+    processed_content = processed_content or content
     if not isinstance(processed_content, dict):
         raise KedoApiError(
             "Process KEDO document content", 502, "Response content is not an object."
@@ -699,8 +703,9 @@ def _build_process_payload(
     safe_due_days = max(due_days or 1, 1)
     sender_target = {"type": "Employee", "id": sender_id}
     signer_target = {"type": "Employee", "id": employee_id}
-    sign_route = {
+    signer_route = {
         "type": "Sign",
+        "id": str(uuid4()),
         "target": signer_target,
         "documentKeys": [1],
         "allowedTypes": signature_types,
@@ -709,6 +714,16 @@ def _build_process_payload(
             "relativeDeadlineAt": safe_due_days,
         },
     }
+    sender_route = {
+        "type": "Sign",
+        "id": str(uuid4()),
+        "target": sender_target,
+        "documentKeys": [1],
+        "allowedTypes": signature_types,
+        "allowedActions": ["Admission", "Rejection"],
+    }
+    if sender_id != employee_id:
+        sender_route["next"] = signer_route
 
     return {
         "processes": [
@@ -720,11 +735,7 @@ def _build_process_payload(
                         "content": content,
                     },
                 },
-                "route": {
-                    "type": "NoAction",
-                    "target": sender_target,
-                    "next": sign_route,
-                },
+                "route": sender_route,
             }
         ]
     }
