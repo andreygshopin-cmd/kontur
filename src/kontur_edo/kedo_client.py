@@ -622,6 +622,13 @@ def _build_process_payload(
     safe_due_days = max(due_days or 1, 1)
     sender_target = {"type": "Employee", "id": sender_id}
     signer_target = {"type": "Employee", "id": employee_id}
+    sender_route = {
+        "type": "Sign",
+        "target": sender_target,
+        "documentKeys": [1],
+        "allowedTypes": signature_types,
+        "allowedActions": ["Admission", "Rejection"],
+    }
     sign_route = {
         "type": "Sign",
         "target": signer_target,
@@ -644,12 +651,7 @@ def _build_process_payload(
                         "content": content,
                     },
                 },
-                "route": {
-                    "type": "NoAction",
-                    "target": sender_target,
-                    "allowedTypes": signature_types,
-                    "next": sign_route,
-                },
+                "route": {**sender_route, "next": sign_route},
             }
         ]
     }

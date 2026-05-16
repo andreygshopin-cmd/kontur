@@ -292,9 +292,10 @@ def test_build_process_payload_has_sender_and_sign_step() -> None:
     route = payload["processes"][0]["route"]
     sign_route = route["next"]
 
-    assert route["type"] == "NoAction"
+    assert route["type"] == "Sign"
     assert route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
     assert route["allowedTypes"] == ["Nep"]
+    assert route["documentKeys"] == [1]
     assert sign_route["type"] == "Sign"
     assert sign_route["target"]["id"] == "22222222-2222-2222-2222-222222222222"
     assert sign_route["allowedTypes"] == ["Nep"]
