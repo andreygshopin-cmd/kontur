@@ -3,7 +3,7 @@ from __future__ import annotations
 import socket
 import ssl
 from datetime import UTC, datetime
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any
 from urllib.parse import urlparse
 
@@ -593,9 +593,9 @@ def _process_content(
 ) -> dict[str, Any]:
     response = _request(
         client,
-        "Process KEDO document content",
+        "Start KEDO document content processing",
         "POST",
-        _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/documents/process"),
+        _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/documents/process/tasks"),
         headers=_json_headers(access_token, api_key),
         json={
             "content": content,
@@ -603,7 +603,14 @@ def _process_content(
         },
     )
 
-    payload = response.json()
+    payload = _wait_for_content_processing_result(
+        client,
+        settings,
+        access_token,
+        api_key,
+        org_id,
+        response.json(),
+    )
     if not isinstance(payload, dict):
         raise KedoApiError("Process KEDO document content", 502, "Unexpected non-object response.")
 
@@ -617,6 +624,65 @@ def _process_content(
             "Process KEDO document content", 502, "Response content is not an object."
         )
     return dict(processed_content)
+
+
+def _wait_for_content_processing_result(
+    client: httpx.Client,
+    settings: Settings,
+    access_token: str,
+    api_key: str,
+    org_id: str,
+    task_payload: Any,
+    *,
+    timeout_seconds: float = 60.0,
+    poll_interval_seconds: float = 1.0,
+) -> dict[str, Any]:
+    if not isinstance(task_payload, dict):
+        raise KedoApiError(
+            "Process KEDO document content", 502, "Unexpected non-object task response."
+        )
+
+    task_id = _string_value(task_payload, "id")
+    started_at = perf_counter()
+    payload = task_payload
+    while True:
+        status = _string_value(payload, "status")
+        if status == "Complete":
+            result = payload.get("result")
+            if not isinstance(result, dict):
+                raise KedoApiError(
+                    "Process KEDO document content", 502, "Task result is not an object."
+                )
+            return result
+
+        if status in {"Failed", "Unknown"}:
+            result = payload.get("result")
+            error_type = result.get("errorType") if isinstance(result, dict) else None
+            message = error_type if isinstance(error_type, str) and error_type else status
+            raise KedoApiError("Process KEDO document content", 422, message)
+
+        if not task_id:
+            raise KedoApiError(
+                "Process KEDO document content", 502, "Task response does not contain id."
+            )
+        if perf_counter() - started_at >= timeout_seconds:
+            raise KedoApiError(
+                "Process KEDO document content", 504, "Content processing task timed out."
+            )
+
+        sleep(poll_interval_seconds)
+        response = _request(
+            client,
+            "Get KEDO document content processing result",
+            "GET",
+            _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/documents/process/tasks/{task_id}"),
+            headers=_json_headers(access_token, api_key),
+        )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise KedoApiError(
+                "Process KEDO document content", 502, "Unexpected non-object task response."
+            )
 
 
 def _build_process_payload(
@@ -640,8 +706,7 @@ def _build_process_payload(
         "allowedTypes": signature_types,
         "allowedActions": ["Admission", "Rejection"],
         "deadline": {
-            "type": "CalendarDays",
-            "days": safe_due_days,
+            "relativeDeadlineAt": safe_due_days,
         },
     }
 
@@ -658,8 +723,6 @@ def _build_process_payload(
                 "route": {
                     "type": "NoAction",
                     "target": sender_target,
-                    "documentKeys": [1],
-                    "allowedTypes": signature_types,
                     "next": sign_route,
                 },
             }

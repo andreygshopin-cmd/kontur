@@ -197,7 +197,7 @@ def test_send_test_document_uses_processed_content(monkeypatch) -> None:
                     200,
                     json={"location": "upload-location"},
                 )
-            if url.endswith("/documents/process"):
+            if url.endswith("/documents/process/tasks"):
                 assert method == "POST"
                 assert kwargs["json"]["content"] == {
                     "location": "upload-location",
@@ -205,7 +205,16 @@ def test_send_test_document_uses_processed_content(monkeypatch) -> None:
                 }
                 return kedo_client_module.httpx.Response(
                     200,
-                    json={"content": {"location": "processed-location", "name": "processed.pdf"}},
+                    json={
+                        "id": "task-id",
+                        "status": "Complete",
+                        "result": {
+                            "content": {
+                                "location": "processed-location",
+                                "name": "processed.pdf",
+                            }
+                        },
+                    },
                 )
             if url.endswith("/processes"):
                 assert method == "POST"
@@ -359,10 +368,10 @@ def test_build_process_payload_has_sender_and_sign_step() -> None:
 
     assert route["type"] == "NoAction"
     assert route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
-    assert route["allowedTypes"] == ["Nep"]
-    assert route["documentKeys"] == [1]
+    assert "allowedTypes" not in route
+    assert "documentKeys" not in route
     assert sign_route["type"] == "Sign"
     assert sign_route["target"]["id"] == "22222222-2222-2222-2222-222222222222"
     assert sign_route["allowedTypes"] == ["Nep"]
     assert sign_route["documentKeys"] == [1]
-    assert sign_route["deadline"] == {"type": "CalendarDays", "days": 3}
+    assert sign_route["deadline"] == {"relativeDeadlineAt": 3}
