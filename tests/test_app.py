@@ -8,6 +8,7 @@ import kontur_edo.app as app_module
 import kontur_edo.kedo_client as kedo_client_module
 from kontur_edo.app import DEFAULT_KEDO_DOCUMENT_TYPE_ID, DEFAULT_KEDO_TEST_FILENAME, app
 from kontur_edo.kedo_client import (
+    KedoApiError,
     KedoConnectivityResponse,
     KedoDocumentType,
     KedoDocumentTypesResponse,
@@ -285,6 +286,54 @@ def test_send_test_document_uses_processed_content(monkeypatch) -> None:
     assert process_document["content"]["name"] == "processed.pdf"
     assert response.content_location == "upload-location"
     assert response.processed_content_location == "processed-location"
+    assert response.request_payload == process_payloads[0]
+
+
+def test_send_test_document_requires_processed_content(monkeypatch) -> None:
+    class FakeClient:
+        def __init__(self, *, base_url, timeout) -> None:
+            self.base_url = base_url
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def request(self, method, url, **kwargs):
+            if url.endswith("/contents"):
+                return kedo_client_module.httpx.Response(
+                    200,
+                    json={"location": "upload-location"},
+                )
+            if url.endswith("/documents/process/tasks"):
+                return kedo_client_module.httpx.Response(
+                    200,
+                    json={"id": "task-id", "status": "Complete", "result": {}},
+                )
+            if url.endswith("/processes"):
+                raise AssertionError("Process must not be created without converted content.")
+            raise AssertionError(f"Unexpected request URL: {url}")
+
+    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
+
+    with pytest.raises(KedoApiError, match="Content processing did not return converted content"):
+        send_test_document(
+            Settings(
+                _env_file=None,
+                kedo_api_key="api-key",
+                kedo_org_id="org-id",
+            ),
+            access_token="token",
+            document_type_id=DEFAULT_KEDO_DOCUMENT_TYPE_ID,
+            sender_id="sender-id",
+            employee_id="employee-id",
+            signature_type="Nep",
+            due_days=2,
+            file_name="test.pdf",
+            file_bytes=b"%PDF-test",
+        )
 
 
 def test_kedo_connectivity(monkeypatch) -> None:

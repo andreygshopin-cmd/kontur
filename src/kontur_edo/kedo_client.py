@@ -80,6 +80,7 @@ class KedoTestDocumentResponse(BaseModel):
     processed_content_location: str | None
     process_ids: list[str]
     raw_response: list[dict[str, Any]]
+    request_payload: dict[str, Any] | None = None
 
 
 class KedoConnectivityResponse(BaseModel):
@@ -184,6 +185,7 @@ def send_test_document(
             if (process_id := _string_value(process, "id")) is not None
         ],
         raw_response=raw_processes,
+        request_payload=process_payload,
     )
 
 
@@ -622,10 +624,17 @@ def _process_content(
     processed_content = payload.get("content")
     if not isinstance(processed_content, dict) and _string_value(payload, "location") is not None:
         processed_content = payload
-    processed_content = processed_content or content
     if not isinstance(processed_content, dict):
         raise KedoApiError(
-            "Process KEDO document content", 502, "Response content is not an object."
+            "Process KEDO document content",
+            422,
+            "Content processing did not return converted content.",
+        )
+    if _string_value(processed_content, "location") is None:
+        raise KedoApiError(
+            "Process KEDO document content",
+            422,
+            "Converted content does not contain location.",
         )
     return dict(processed_content)
 

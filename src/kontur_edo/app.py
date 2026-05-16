@@ -111,6 +111,10 @@ def index() -> str:
     .details { display: grid; grid-template-columns: 180px 1fr; gap: 10px 16px; }
     .label { color: #52606d; font-weight: 700; }
     .metadata { max-width: 280px; white-space: pre-wrap; }
+    .json-block {
+      margin: 0; max-height: 360px; overflow: auto; white-space: pre-wrap;
+      background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px;
+    }
     @media (max-width: 720px) {
       header { align-items: flex-start; flex-direction: column; }
       .actions { justify-content: flex-start; }
@@ -503,7 +507,10 @@ def index() -> str:
     });
 
     function renderKedoTestDocument(data) {
-      const contentLocation = data.processed_content_location || data.content_location || "";
+      const uploadedContentLocation = data.content_location || "";
+      const processedContentLocation = data.processed_content_location || "";
+      const rawResponse = JSON.stringify(data.raw_response || [], null, 2);
+      const requestPayload = JSON.stringify(data.request_payload || {}, null, 2);
       contentNode.innerHTML = `
         <div class="details">
           <div class="label">Организация</div><div><code>${escapeHtml(data.org_id)}</code></div>
@@ -511,10 +518,16 @@ def index() -> str:
           <div class="label">Тип документа</div>
           <div><code>${escapeHtml(data.document_type_id)}</code></div>
           <div class="label">Файл</div><div>${escapeHtml(data.file_name)}</div>
-          <div class="label">Content location</div>
-          <div><code>${escapeHtml(contentLocation)}</code></div>
+          <div class="label">Upload location</div>
+          <div><code>${escapeHtml(uploadedContentLocation)}</code></div>
+          <div class="label">Processed location</div>
+          <div><code>${escapeHtml(processedContentLocation)}</code></div>
           <div class="label">Process ID</div>
           <div><code>${escapeHtml((data.process_ids || []).join(", "))}</code></div>
+          <div class="label">Запрос процесса</div>
+          <pre class="json-block"><code>${escapeHtml(requestPayload)}</code></pre>
+          <div class="label">Ответ КЭДО</div>
+          <pre class="json-block"><code>${escapeHtml(rawResponse)}</code></pre>
         </div>
       `;
     }
