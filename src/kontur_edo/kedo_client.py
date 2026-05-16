@@ -714,7 +714,7 @@ def _build_process_payload(
             "relativeDeadlineAt": safe_due_days,
         },
     }
-    sender_route = {
+    sender_sign_route = {
         "type": "Sign",
         "id": str(uuid4()),
         "target": sender_target,
@@ -722,6 +722,12 @@ def _build_process_payload(
         "allowedTypes": signature_types,
         "allowedActions": ["Admission", "Rejection"],
         "next": signer_route,
+    }
+    sender_route = {
+        "type": "NoAction",
+        "id": str(uuid4()),
+        "target": sender_target,
+        "next": sender_sign_route,
     }
 
     return {

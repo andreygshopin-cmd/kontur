@@ -404,13 +404,19 @@ def test_build_process_payload_has_sender_and_sign_step() -> None:
     )
 
     route = payload["processes"][0]["route"]
-    sign_route = route["next"]
+    sender_sign_route = route["next"]
+    sign_route = sender_sign_route["next"]
 
-    assert route["type"] == "Sign"
+    assert route["type"] == "NoAction"
     UUID(route["id"])
     assert route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
-    assert route["allowedTypes"] == ["Nep"]
-    assert route["documentKeys"] == [1]
+    assert "allowedTypes" not in route
+    assert "documentKeys" not in route
+    assert sender_sign_route["type"] == "Sign"
+    UUID(sender_sign_route["id"])
+    assert sender_sign_route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
+    assert sender_sign_route["allowedTypes"] == ["Nep"]
+    assert sender_sign_route["documentKeys"] == [1]
     assert sign_route["type"] == "Sign"
     UUID(sign_route["id"])
     assert sign_route["target"]["id"] == "22222222-2222-2222-2222-222222222222"
@@ -431,12 +437,15 @@ def test_build_process_payload_keeps_second_step_for_same_sender_and_signer() ->
     )
 
     route = payload["processes"][0]["route"]
-    sign_route = route["next"]
+    sender_sign_route = route["next"]
+    sign_route = sender_sign_route["next"]
 
-    assert route["type"] == "Sign"
+    assert route["type"] == "NoAction"
     assert route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
-    assert route["allowedTypes"] == ["Pep"]
-    assert route["documentKeys"] == [1]
+    assert sender_sign_route["type"] == "Sign"
+    assert sender_sign_route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
+    assert sender_sign_route["allowedTypes"] == ["Pep"]
+    assert sender_sign_route["documentKeys"] == [1]
     assert sign_route["type"] == "Sign"
     assert sign_route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
     assert sign_route["allowedTypes"] == ["Pep"]
