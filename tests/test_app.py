@@ -272,6 +272,41 @@ def test_kedo_download_document_print(monkeypatch) -> None:
     assert response.headers["content-type"] == "application/pdf"
 
 
+def test_download_content_asks_kedo_for_octet_stream(monkeypatch) -> None:
+    class FakeClient:
+        def __init__(self, *, base_url, timeout) -> None:
+            self.base_url = base_url
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def request(self, method, url, **kwargs):
+            assert method == "GET"
+            assert url.endswith("/contents/file-id")
+            assert kwargs["headers"]["Accept"] == "application/octet-stream"
+            return kedo_client_module.httpx.Response(
+                200,
+                content=b"%PDF-content",
+                headers={"content-type": "application/pdf"},
+            )
+
+    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
+
+    file = kedo_client_module.download_content(
+        Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
+        access_token="token",
+        file_id="file-id",
+        file_name="test.pdf",
+    )
+
+    assert file.content == b"%PDF-content"
+    assert file.content_type == "application/pdf"
+
+
 def test_send_test_document_uses_processed_content(monkeypatch) -> None:
     process_payloads = []
 

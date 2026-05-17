@@ -526,7 +526,11 @@ def index() -> str:
       const firstProcessId = (data.process_ids || [])[0] || "";
       const firstDocumentId = (data.document_ids || [])[0] || "";
       const safeFileName = encodeURIComponent(data.file_name || "document.pdf");
-      const contentDownloadUrl = processedContentLocation
+      const uploadContentUrl = uploadedContentLocation
+        ? `/api/kedo/contents/${encodeURIComponent(uploadedContentLocation)}`
+          + `?filename=${safeFileName}`
+        : "";
+      const processedContentUrl = processedContentLocation
         ? `/api/kedo/contents/${encodeURIComponent(processedContentLocation)}`
           + `?filename=${safeFileName}`
         : "";
@@ -534,8 +538,11 @@ def index() -> str:
         ? `/api/kedo/processes/${encodeURIComponent(firstProcessId)}`
           + `/documents/${encodeURIComponent(firstDocumentId)}/print`
         : "";
-      const contentLink = contentDownloadUrl
-        ? `<a href="${contentDownloadUrl}" target="_blank">Открыть</a>`
+      const uploadContentLink = uploadContentUrl
+        ? `<a href="${uploadContentUrl}" target="_blank">Открыть</a>`
+        : "";
+      const processedContentLink = processedContentUrl
+        ? `<a href="${processedContentUrl}" target="_blank">Открыть</a>`
         : "";
       const printLink = printDownloadUrl
         ? `<a href="${printDownloadUrl}" target="_blank">Открыть</a>`
@@ -555,8 +562,10 @@ def index() -> str:
           <div><code>${escapeHtml((data.process_ids || []).join(", "))}</code></div>
           <div class="label">Document ID</div>
           <div><code>${escapeHtml((data.document_ids || []).join(", "))}</code></div>
-          <div class="label">Скачать content</div>
-          <div>${contentLink}</div>
+          <div class="label">Скачать upload content</div>
+          <div>${uploadContentLink}</div>
+          <div class="label">Скачать processed content</div>
+          <div>${processedContentLink}</div>
           <div class="label">Скачать print</div>
           <div>${printLink}</div>
           <div class="label">Проверка скачивания</div>

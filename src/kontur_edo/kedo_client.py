@@ -451,7 +451,7 @@ def download_content(
 ) -> KedoDownloadedFile:
     token = access_token or authenticate_with_password(settings)
     api_key = _api_key(settings)
-    with httpx.Client(base_url=_base_url(settings), timeout=60.0) as client:
+    with httpx.Client(base_url=_base_url(settings), timeout=180.0) as client:
         org_id = settings.kedo_org_id or _get_first_organization(
             client, settings, token, api_key
         ).id
@@ -468,7 +468,7 @@ def download_document_print(
 ) -> KedoDownloadedFile:
     token = access_token or authenticate_with_password(settings)
     api_key = _api_key(settings)
-    with httpx.Client(base_url=_base_url(settings), timeout=60.0) as client:
+    with httpx.Client(base_url=_base_url(settings), timeout=180.0) as client:
         org_id = settings.kedo_org_id or _get_first_organization(
             client, settings, token, api_key
         ).id
@@ -940,7 +940,7 @@ def _download_content(
         "Download KEDO content",
         "GET",
         _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/contents/{file_id}"),
-        headers=_json_headers(access_token, api_key),
+        headers=_download_headers(access_token, api_key),
     )
     return KedoDownloadedFile(
         content=response.content,
@@ -1186,6 +1186,14 @@ def _request(
 def _json_headers(access_token: str, api_key: str) -> dict[str, str]:
     return {
         "Accept": "application/json",
+        "Authorization": f"Bearer {access_token}",
+        "X-Kontur-ApiKey": api_key,
+    }
+
+
+def _download_headers(access_token: str, api_key: str) -> dict[str, str]:
+    return {
+        "Accept": "application/octet-stream",
         "Authorization": f"Bearer {access_token}",
         "X-Kontur-ApiKey": api_key,
     }
