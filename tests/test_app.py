@@ -672,7 +672,7 @@ def test_get_document_types_uses_bounded_filtered_query(monkeypatch) -> None:
 
     assert calls == [
         {
-            "limit": 20,
+            "limit": 10,
             "offset": 0,
             "includeDeleted": False,
             "includeDisabled": False,
