@@ -53,9 +53,9 @@ def test_index_has_only_kedo_controls() -> None:
     assert response.status_code == 200
     assert 'id="deploy-info"' in response.text
     assert "Проверить КЭДО API" in response.text
-    assert "Фильтр типов документов" in response.text
-    assert 'id="kedo-document-type-filter"' in response.text
-    assert "Несчастн" in response.text
+    assert "Фильтр типов документов" not in response.text
+    assert 'id="kedo-document-type-filter"' not in response.text
+    assert "documentTypesUrl" not in response.text
     assert "Получить типы документов КЭДО" in response.text
     assert "Получить сотрудников" in response.text
     assert "Получить типы подписи" in response.text
@@ -681,6 +681,52 @@ def test_get_document_types_uses_bounded_filtered_query(monkeypatch) -> None:
     ]
     assert len(response.document_types) == 1
     assert response.document_types[0].name == "Несчастный случай"
+
+
+def test_get_document_types_returns_first_500_without_filter(monkeypatch) -> None:
+    calls = []
+
+    class FakeClient:
+        def __init__(self, *, base_url, timeout) -> None:
+            self.base_url = base_url
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def request(self, method, url, **kwargs):
+            assert method == "GET"
+            assert url.endswith("/document-types")
+            calls.append(kwargs["params"])
+            offset = kwargs["params"]["offset"]
+            return kedo_client_module.httpx.Response(
+                200,
+                json={
+                    "result": [
+                        {
+                            "id": f"00000000-0000-0000-0000-{offset + index:012d}",
+                            "name": f"Document {offset + index}",
+                        }
+                        for index in range(100)
+                    ]
+                },
+            )
+
+    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
+
+    response = get_document_types(
+        Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
+        access_token="token",
+    )
+
+    assert [call["offset"] for call in calls] == [0, 100, 200, 300, 400]
+    assert all(call["limit"] == 100 for call in calls)
+    assert all(call["includeSystems"] is True for call in calls)
+    assert len(response.document_types) == 500
+    assert response.document_types[-1].name == "Document 499"
 
 
 def test_get_document_types_returns_filtered_matches_after_late_timeout(monkeypatch) -> None:

@@ -166,10 +166,6 @@ def index() -> str:
         __DEPLOY_INFO_HTML__
       </div>
       <div class="actions">
-        <label class="action-field" for="kedo-document-type-filter">
-          Фильтр типов документов
-          <input id="kedo-document-type-filter" type="text" value="Несчастн">
-        </label>
         <button id="load-kedo-document-types" class="secondary">
           Получить типы документов КЭДО
         </button>
@@ -222,7 +218,6 @@ def index() -> str:
   </main>
   <script>
     const checkKedoButton = document.getElementById("check-kedo");
-    const documentTypeFilterInput = document.getElementById("kedo-document-type-filter");
     const documentTypesButton = document.getElementById("load-kedo-document-types");
     const employeesButton = document.getElementById("load-kedo-employees");
     const signatureTypesButton = document.getElementById("load-kedo-signature-types");
@@ -570,12 +565,6 @@ def index() -> str:
       }
     }
 
-    function documentTypesUrl() {
-      const filter = documentTypeFilterInput.value.trim();
-      const query = filter ? `?filter=${encodeURIComponent(filter)}` : "";
-      return `/api/kedo/document-types${query}`;
-    }
-
     checkKedoButton.addEventListener("click", () => loadData(
       "/api/kedo/connectivity",
       renderKedoConnectivity,
@@ -583,7 +572,7 @@ def index() -> str:
     ));
 
     documentTypesButton.addEventListener("click", () => loadData(
-      documentTypesUrl(),
+      "/api/kedo/document-types",
       renderKedoDocumentTypes,
       (data) => `Найдено типов документов КЭДО: ${data.document_types.length}`
     ));
