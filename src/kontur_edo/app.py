@@ -320,6 +320,21 @@ def index() -> str:
       return value ? "Да" : "Нет";
     }
 
+    function formatClientDateTime(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return new Intl.DateTimeFormat("ru-RU", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        timeZoneName: "short"
+      }).format(date);
+    }
+
     function bindDocumentTypeButtons() {
       contentNode.querySelectorAll("[data-document-type-id]").forEach((button) => {
         button.addEventListener("click", () => {
@@ -462,9 +477,10 @@ def index() -> str:
         const isValid = document.is_valid === null || document.is_valid === undefined
           ? ""
           : formatBoolean(document.is_valid);
+        const signedAt = formatClientDateTime(document.signed_at);
         return `
         <tr>
-          <td>${escapeHtml(document.signed_at)}</td>
+          <td title="${escapeHtml(document.signed_at)}">${escapeHtml(signedAt)}</td>
           <td>${escapeHtml(document.action || "")}</td>
           <td>${escapeHtml(document.process_name || "")}</td>
           <td><code>${escapeHtml(document.process_id)}</code></td>

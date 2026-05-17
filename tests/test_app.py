@@ -20,6 +20,7 @@ from kontur_edo.kedo_client import (
     KedoSignedDocumentsResponse,
     KedoTestDocumentResponse,
     _build_process_payload,
+    get_document_types,
     get_signed_documents,
     send_test_document,
 )
@@ -73,6 +74,8 @@ def test_index_has_only_kedo_controls() -> None:
     assert 'id="kedo-file"' in response.text
     assert 'class="debug-panel"' in response.text
     assert 'class="debug-actions"' in response.text
+    assert "formatClientDateTime(document.signed_at)" in response.text
+    assert 'title="${escapeHtml(document.signed_at)}"' in response.text
     assert "KONTUR_KEDO_TEST_FILENAME" not in response.text
     assert "Войти в Контур" not in response.text
     assert "Получить организации" not in response.text
@@ -622,6 +625,150 @@ def test_kedo_document_types_filters_by_name(monkeypatch) -> None:
     payload = response.json()
     assert len(payload["document_types"]) == 1
     assert payload["document_types"][0]["name"] == "Несчастный случай"
+
+
+def test_get_document_types_uses_bounded_filtered_query(monkeypatch) -> None:
+    calls = []
+
+    class FakeClient:
+        def __init__(self, *, base_url, timeout) -> None:
+            self.base_url = base_url
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def request(self, method, url, **kwargs):
+            assert method == "GET"
+            assert url.endswith("/document-types")
+            calls.append(kwargs["params"])
+            return kedo_client_module.httpx.Response(
+                200,
+                json={
+                    "result": [
+                        {
+                            "id": "22222222-2222-2222-2222-222222222222",
+                            "name": "Несчастный случай",
+                        },
+                        {
+                            "id": "33333333-3333-3333-3333-333333333333",
+                            "name": "Кадровый документ",
+                        },
+                    ]
+                },
+            )
+
+    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
+
+    response = get_document_types(
+        Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
+        access_token="token",
+        filter_text="Несчастн",
+    )
+
+    assert calls == [
+        {
+            "limit": 100,
+            "offset": 0,
+            "includeDeleted": False,
+            "includeDisabled": False,
+            "includeSystems": True,
+        }
+    ]
+    assert len(response.document_types) == 1
+    assert response.document_types[0].name == "Несчастный случай"
+
+
+def test_get_document_types_returns_filtered_matches_after_late_timeout(monkeypatch) -> None:
+    calls = 0
+
+    class FakeClient:
+        def __init__(self, *, base_url, timeout) -> None:
+            self.base_url = base_url
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def request(self, method, url, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                raise kedo_client_module.httpx.ReadTimeout("timed out")
+            return kedo_client_module.httpx.Response(
+                200,
+                json={
+                    "result": [
+                        {
+                            "id": f"00000000-0000-0000-0000-{index:012d}",
+                            "name": "Несчастный случай" if index == 0 else "Кадровый документ",
+                        }
+                        for index in range(100)
+                    ]
+                },
+            )
+
+    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
+
+    response = get_document_types(
+        Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
+        access_token="token",
+        filter_text="Несчастн",
+    )
+
+    assert calls == 2
+    assert len(response.document_types) == 1
+    assert response.document_types[0].name == "Несчастный случай"
+
+
+def test_get_document_types_retries_filtered_query_without_system_types(monkeypatch) -> None:
+    include_systems_values = []
+
+    class FakeClient:
+        def __init__(self, *, base_url, timeout) -> None:
+            self.base_url = base_url
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def request(self, method, url, **kwargs):
+            include_systems = kwargs["params"]["includeSystems"]
+            include_systems_values.append(include_systems)
+            if include_systems:
+                raise kedo_client_module.httpx.ReadTimeout("timed out")
+            return kedo_client_module.httpx.Response(
+                200,
+                json={
+                    "result": [
+                        {
+                            "id": "22222222-2222-2222-2222-222222222222",
+                            "name": "Несчастный случай",
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
+
+    response = get_document_types(
+        Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
+        access_token="token",
+        filter_text="Несчастн",
+    )
+
+    assert include_systems_values == [True, False]
+    assert len(response.document_types) == 1
+    assert response.document_types[0].name == "Несчастный случай"
 
 
 def test_kedo_employees(monkeypatch) -> None:
