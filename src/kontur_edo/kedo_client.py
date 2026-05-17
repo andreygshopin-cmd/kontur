@@ -222,14 +222,6 @@ def send_test_document(
             f"Created document is still a draft: {', '.join(draft_document_ids)}.",
         )
 
-    download_checks = _check_created_document_downloads(
-        settings,
-        access_token=token,
-        process_id=process_ids[0] if process_ids else None,
-        document_id=document_ids[0] if document_ids else None,
-        content_location=_string_value(processed_content, "location"),
-    )
-
     return KedoTestDocumentResponse(
         org_id=org_id,
         employee_id=employee_id,
@@ -242,7 +234,7 @@ def send_test_document(
         raw_response=raw_processes,
         request_payload=process_payload,
         process_details=process_details,
-        download_checks=download_checks,
+        download_checks=[],
     )
 
 

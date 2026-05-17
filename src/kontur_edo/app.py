@@ -519,7 +519,10 @@ def index() -> str:
       const rawResponse = JSON.stringify(data.raw_response || [], null, 2);
       const requestPayload = JSON.stringify(data.request_payload || {}, null, 2);
       const processDetails = JSON.stringify(data.process_details || [], null, 2);
-      const downloadChecks = JSON.stringify(data.download_checks || [], null, 2);
+      const downloadChecks = (data.download_checks || []).length
+        ? JSON.stringify(data.download_checks, null, 2)
+        : "Автоматическая проверка не запускалась, чтобы не ронять отправку по таймауту. "
+          + "Используйте ссылки скачивания отдельно.";
       const firstProcessId = (data.process_ids || [])[0] || "";
       const firstDocumentId = (data.document_ids || [])[0] || "";
       const safeFileName = encodeURIComponent(data.file_name || "document.pdf");

@@ -339,23 +339,6 @@ def test_send_test_document_uses_processed_content(monkeypatch) -> None:
                         },
                     },
                 )
-            if url.endswith("/contents/processed-location"):
-                assert method == "GET"
-                return kedo_client_module.httpx.Response(
-                    200,
-                    content=b"%PDF-content",
-                    headers={"content-type": "application/pdf"},
-                )
-            if url.endswith("/processes/process-id/documents/document-id/print/tasks"):
-                assert method == "POST"
-                return kedo_client_module.httpx.Response(
-                    200,
-                    json={
-                        "taskId": "print-task-id",
-                        "status": "Complete",
-                        "bytes": "JVBERi1wcmludA==",
-                    },
-                )
             raise AssertionError(f"Unexpected request URL: {url}")
 
     monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
@@ -383,8 +366,7 @@ def test_send_test_document_uses_processed_content(monkeypatch) -> None:
     assert response.processed_content_location == "processed-location"
     assert response.document_ids == ["document-id"]
     assert response.request_payload == process_payloads[0]
-    assert [check.method for check in response.download_checks] == ["contents", "print"]
-    assert all(check.ok for check in response.download_checks)
+    assert response.download_checks == []
 
 
 def test_send_test_document_requires_processed_content(monkeypatch) -> None:
