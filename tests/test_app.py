@@ -57,6 +57,9 @@ def test_index_has_only_kedo_controls() -> None:
     assert 'id="kedo-document-type-filter"' not in response.text
     assert "documentTypesUrl" not in response.text
     assert "Получить типы документов КЭДО" in response.text
+    assert "Следующие 20" in response.text
+    assert 'id="load-next-kedo-document-types"' in response.text
+    assert "loadDocumentTypesPage(documentTypesOffset)" in response.text
     assert "Получить сотрудников" in response.text
     assert "Получить типы подписи" in response.text
     assert "Проверить подписание документов" in response.text
@@ -583,8 +586,9 @@ def test_kedo_connectivity(monkeypatch) -> None:
 
 
 def test_kedo_document_types(monkeypatch) -> None:
-    def fake_get_kedo_document_types(_settings, *, filter_text=None):
+    def fake_get_kedo_document_types(_settings, *, filter_text=None, offset=0):
         assert filter_text is None
+        assert offset == 0
         return KedoDocumentTypesResponse(
             org_id="11111111-1111-1111-1111-111111111111",
             document_types=[
@@ -606,8 +610,9 @@ def test_kedo_document_types(monkeypatch) -> None:
 
 
 def test_kedo_document_types_filters_by_name(monkeypatch) -> None:
-    def fake_get_kedo_document_types(_settings, *, filter_text=None):
+    def fake_get_kedo_document_types(_settings, *, filter_text=None, offset=0):
         assert filter_text == "Несчастн"
+        assert offset == 20
         return KedoDocumentTypesResponse(
             org_id="11111111-1111-1111-1111-111111111111",
             document_types=[
@@ -620,7 +625,10 @@ def test_kedo_document_types_filters_by_name(monkeypatch) -> None:
 
     monkeypatch.setattr(app_module, "get_kedo_document_types", fake_get_kedo_document_types)
 
-    response = client.get("/api/kedo/document-types", params={"filter": "Несчастн"})
+    response = client.get(
+        "/api/kedo/document-types",
+        params={"filter": "Несчастн", "offset": 20},
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -727,6 +735,53 @@ def test_get_document_types_returns_first_20_without_filter(monkeypatch) -> None
     assert all(call["includeSystems"] is True for call in calls)
     assert len(response.document_types) == 20
     assert response.document_types[-1].name == "Document 19"
+
+
+def test_get_document_types_returns_next_20_without_filter(monkeypatch) -> None:
+    calls = []
+
+    class FakeClient:
+        def __init__(self, *, base_url, timeout) -> None:
+            self.base_url = base_url
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def request(self, method, url, **kwargs):
+            assert method == "GET"
+            assert url.endswith("/document-types")
+            calls.append(kwargs["params"])
+            offset = kwargs["params"]["offset"]
+            return kedo_client_module.httpx.Response(
+                200,
+                json={
+                    "result": [
+                        {
+                            "id": f"00000000-0000-0000-0000-{offset + index:012d}",
+                            "name": f"Document {offset + index}",
+                        }
+                        for index in range(20)
+                    ]
+                },
+            )
+
+    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
+
+    response = get_document_types(
+        Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
+        access_token="token",
+        offset=20,
+    )
+
+    assert [call["offset"] for call in calls] == [20]
+    assert all(call["limit"] == 20 for call in calls)
+    assert len(response.document_types) == 20
+    assert response.document_types[0].name == "Document 20"
+    assert response.document_types[-1].name == "Document 39"
 
 
 def test_get_document_types_returns_filtered_matches_after_late_timeout(monkeypatch) -> None:

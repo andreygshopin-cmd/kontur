@@ -470,10 +470,12 @@ def get_document_types(
     *,
     access_token: str | None = None,
     filter_text: str | None = None,
+    offset: int = 0,
 ) -> KedoDocumentTypesResponse:
     token = access_token or authenticate_with_password(settings)
     api_key = _api_key(settings)
     is_filtered = bool(filter_text and filter_text.strip())
+    safe_offset = max(offset, 0)
 
     with httpx.Client(base_url=_base_url(settings), timeout=DOCUMENT_TYPES_TIMEOUT) as client:
         org_id = settings.kedo_org_id or _get_first_organization(
@@ -496,6 +498,7 @@ def get_document_types(
                 if is_filtered
                 else DOCUMENT_TYPES_MAX_PAGES,
                 return_partial_on_timeout=is_filtered,
+                initial_offset=safe_offset,
             )
         except KedoApiError as error:
             if not is_filtered or error.status_code != 0:
@@ -512,6 +515,7 @@ def get_document_types(
                 filter_text=filter_text,
                 max_pages=FILTERED_DOCUMENT_TYPES_MAX_PAGES,
                 return_partial_on_timeout=True,
+                initial_offset=safe_offset,
             )
         if is_filtered and not document_types:
             document_types = _get_document_types(
@@ -526,6 +530,7 @@ def get_document_types(
                 filter_text=filter_text,
                 max_pages=2,
                 return_partial_on_timeout=True,
+                initial_offset=safe_offset,
             )
 
     return KedoDocumentTypesResponse(org_id=org_id, document_types=document_types)
@@ -978,10 +983,11 @@ def _get_document_types(
     filter_text: str | None,
     max_pages: int | None = None,
     return_partial_on_timeout: bool = False,
+    initial_offset: int = 0,
 ) -> list[KedoDocumentType]:
     document_types: list[KedoDocumentType] = []
     normalized_filter = filter_text.strip().casefold() if filter_text else ""
-    offset = 0
+    offset = max(initial_offset, 0)
     pages_read = 0
     while True:
         try:

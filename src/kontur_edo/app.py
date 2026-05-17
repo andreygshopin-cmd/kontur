@@ -169,6 +169,9 @@ def index() -> str:
         <button id="load-kedo-document-types" class="secondary">
           Получить типы документов КЭДО
         </button>
+        <button id="load-next-kedo-document-types" class="secondary">
+          Следующие 20
+        </button>
         <button id="load-kedo-employees" class="secondary">Получить сотрудников</button>
         <button id="load-kedo-signature-types" class="secondary">Получить типы подписи</button>
       </div>
@@ -219,6 +222,7 @@ def index() -> str:
   <script>
     const checkKedoButton = document.getElementById("check-kedo");
     const documentTypesButton = document.getElementById("load-kedo-document-types");
+    const nextDocumentTypesButton = document.getElementById("load-next-kedo-document-types");
     const employeesButton = document.getElementById("load-kedo-employees");
     const signatureTypesButton = document.getElementById("load-kedo-signature-types");
     const storageTestButton = document.getElementById("test-kedo-storage");
@@ -234,6 +238,7 @@ def index() -> str:
     const buttons = [
       checkKedoButton,
       documentTypesButton,
+      nextDocumentTypesButton,
       employeesButton,
       signatureTypesButton,
       storageTestButton,
@@ -243,6 +248,8 @@ def index() -> str:
     ];
     const statusNode = document.getElementById("status");
     const contentNode = document.getElementById("content");
+    const documentTypesPageSize = 20;
+    let documentTypesOffset = 0;
 
     function escapeHtml(value) {
       return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -571,11 +578,28 @@ def index() -> str:
       (data) => data.tls_connected ? "KEDO API доступен" : "KEDO API не отвечает полностью"
     ));
 
-    documentTypesButton.addEventListener("click", () => loadData(
-      "/api/kedo/document-types",
-      renderKedoDocumentTypes,
-      (data) => `Найдено типов документов КЭДО: ${data.document_types.length}`
-    ));
+    function loadDocumentTypesPage(offset) {
+      return loadData(
+        `/api/kedo/document-types?offset=${offset}`,
+        renderKedoDocumentTypes,
+        (data) => {
+          const from = offset + 1;
+          const to = offset + (data.document_types || []).length;
+          return `Найдено типов документов КЭДО: ${data.document_types.length}; ` +
+            `записи ${from}-${to}`;
+        }
+      );
+    }
+
+    documentTypesButton.addEventListener("click", () => {
+      documentTypesOffset = 0;
+      loadDocumentTypesPage(documentTypesOffset);
+    });
+
+    nextDocumentTypesButton.addEventListener("click", () => {
+      documentTypesOffset += documentTypesPageSize;
+      loadDocumentTypesPage(documentTypesOffset);
+    });
 
     employeesButton.addEventListener("click", () => loadData(
       "/api/kedo/employees",
@@ -876,9 +900,10 @@ def kedo_connectivity() -> KedoConnectivityResponse:
 @app.get("/api/kedo/document-types", response_model=KedoDocumentTypesResponse)
 def kedo_document_types(
     filter_text: str | None = Query(default=None, alias="filter"),
+    offset: int = Query(default=0, ge=0),
 ) -> KedoDocumentTypesResponse:
     try:
-        return get_kedo_document_types(get_settings(), filter_text=filter_text)
+        return get_kedo_document_types(get_settings(), filter_text=filter_text, offset=offset)
     except KedoAuthError as error:
         raise HTTPException(status_code=401, detail=str(error)) from error
     except KedoApiError as error:
