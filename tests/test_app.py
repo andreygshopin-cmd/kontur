@@ -16,8 +16,11 @@ from kontur_edo.kedo_client import (
     KedoEmployee,
     KedoEmployeesResponse,
     KedoSignatureTypesResponse,
+    KedoSignedDocument,
+    KedoSignedDocumentsResponse,
     KedoTestDocumentResponse,
     _build_process_payload,
+    get_signed_documents,
     send_test_document,
 )
 from kontur_edo.settings import Settings
@@ -54,6 +57,7 @@ def test_index_has_only_kedo_controls() -> None:
     assert "Получить типы документов КЭДО" in response.text
     assert "Получить сотрудников" in response.text
     assert "Получить типы подписи" in response.text
+    assert "Проверить подписание документов" in response.text
     assert "Отправить тестовый файл в КЭДО" in response.text
     assert DEFAULT_KEDO_DOCUMENT_TYPE_ID in response.text
     assert "Отправитель" in response.text
@@ -652,6 +656,142 @@ def test_kedo_signature_types(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"signature_types": ["Pep", "Nep"]}
+
+
+def test_kedo_signed_documents(monkeypatch) -> None:
+    def fake_get_signed_documents(_settings, *, limit, offset=None):
+        assert limit == 25
+        assert offset == "offset-id"
+        return KedoSignedDocumentsResponse(
+            org_id="11111111-1111-1111-1111-111111111111",
+            last_offset="last-offset-id",
+            signed_documents=[
+                KedoSignedDocument(
+                    process_id="22222222-2222-2222-2222-222222222222",
+                    process_name="test.pdf",
+                    document_key=0,
+                    document_id="33333333-3333-3333-3333-333333333333",
+                    document_name="test.pdf",
+                    signed_at="2026-05-17T12:34:56Z",
+                    action="Admission",
+                    signature_id="44444444-4444-4444-4444-444444444444",
+                    is_checked=True,
+                    is_valid=True,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(app_module, "get_signed_documents", fake_get_signed_documents)
+
+    response = client.get(
+        "/api/kedo/signed-documents",
+        params={"limit": 25, "offset": "offset-id"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["signed_documents"][0]["signed_at"] == "2026-05-17T12:34:56Z"
+
+
+def test_get_signed_documents_reads_signature_events(monkeypatch) -> None:
+    class FakeClient:
+        def __init__(self, *, base_url, timeout) -> None:
+            self.base_url = base_url
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def request(self, method, url, **kwargs):
+            if url.endswith("/processes/events/query"):
+                assert method == "POST"
+                assert kwargs["json"] == {"limit": 100, "inverted": True}
+                return kedo_client_module.httpx.Response(
+                    200,
+                    json={
+                        "lastOffset": "last-offset-id",
+                        "events": [
+                            {
+                                "eventType": 10,
+                                "processId": "process-id",
+                                "eventId": "event-id",
+                                "createdAt": "2026-05-17T12:35:00Z",
+                            },
+                            {
+                                "eventType": 7,
+                                "processId": "ignored-process-id",
+                            },
+                        ],
+                    },
+                )
+            if url.endswith("/processes/process-id"):
+                assert method == "GET"
+                assert kwargs["params"]["flat"] is True
+                return kedo_client_module.httpx.Response(
+                    200,
+                    json={
+                        "id": "process-id",
+                        "name": "test.pdf",
+                        "createdAt": "2026-05-17T12:00:00Z",
+                        "flatDocuments": [
+                            {
+                                "documentKey": 0,
+                                "id": "document-id",
+                                "content": {"name": "test.pdf"},
+                            }
+                        ],
+                        "flatPath": {
+                            "nodes": [
+                                {
+                                    "type": "Sign",
+                                    "routeNodeId": "route-node-id",
+                                    "isFinished": True,
+                                    "signedContents": {
+                                        "0": {
+                                            "signature": {
+                                                "isChecked": True,
+                                                "isValid": True,
+                                                "signature": {
+                                                    "id": "signature-id",
+                                                    "action": "Admission",
+                                                    "location": "signature-location-id",
+                                                    "createdAt": "2026-05-17T12:34:56Z",
+                                                    "author": {
+                                                        "employeeId": "employee-id",
+                                                        "userId": "user-id",
+                                                    },
+                                                },
+                                            }
+                                        }
+                                    },
+                                }
+                            ]
+                        },
+                    },
+                )
+            raise AssertionError(f"Unexpected request URL: {url}")
+
+    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
+
+    response = get_signed_documents(
+        Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
+        access_token="token",
+    )
+
+    assert response.org_id == "org-id"
+    assert response.last_offset == "last-offset-id"
+    assert len(response.signed_documents) == 1
+    signed_document = response.signed_documents[0]
+    assert signed_document.process_id == "process-id"
+    assert signed_document.document_id == "document-id"
+    assert signed_document.document_name == "test.pdf"
+    assert signed_document.signed_at == "2026-05-17T12:34:56Z"
+    assert signed_document.action == "Admission"
+    assert signed_document.signature_location == "signature-location-id"
+    assert signed_document.signer_employee_id == "employee-id"
+    assert signed_document.is_valid is True
 
 
 def test_build_process_payload_has_sender_and_sign_step() -> None:

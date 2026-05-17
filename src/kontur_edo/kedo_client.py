@@ -134,6 +134,31 @@ class KedoRecentDocumentsCompareResponse(BaseModel):
     comparison: dict[str, Any]
 
 
+class KedoSignedDocument(BaseModel):
+    process_id: str
+    process_name: str | None = None
+    process_created_at: str | None = None
+    document_key: int | None = None
+    document_id: str | None = None
+    document_name: str | None = None
+    signed_at: str
+    action: str | None = None
+    signature_id: str | None = None
+    signature_location: str | None = None
+    signer_employee_id: str | None = None
+    signer_user_id: str | None = None
+    is_checked: bool | None = None
+    is_valid: bool | None = None
+    event_id: str | None = None
+    event_created_at: str | None = None
+
+
+class KedoSignedDocumentsResponse(BaseModel):
+    org_id: str
+    last_offset: str | None = None
+    signed_documents: list[KedoSignedDocument]
+
+
 class KedoTestDocumentResponse(BaseModel):
     org_id: str
     employee_id: str
@@ -654,6 +679,80 @@ def compare_recent_documents(
     )
 
 
+def get_signed_documents(
+    settings: Settings,
+    *,
+    access_token: str | None = None,
+    limit: int = 100,
+    offset: str | None = None,
+) -> KedoSignedDocumentsResponse:
+    token = access_token or authenticate_with_password(settings)
+    api_key = _api_key(settings)
+    safe_limit = min(max(limit, 1), 100)
+
+    with httpx.Client(base_url=_base_url(settings), timeout=60.0) as client:
+        org_id = settings.kedo_org_id or _get_first_organization(
+            client, settings, token, api_key
+        ).id
+        query: dict[str, Any] = {
+            "limit": safe_limit,
+            "inverted": True,
+        }
+        if offset:
+            query["offset"] = offset
+
+        response = _request(
+            client,
+            "Query KEDO process events",
+            "POST",
+            _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/processes/events/query"),
+            headers=_json_headers(token, api_key),
+            json=query,
+        )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise KedoApiError(
+                "Query KEDO process events", 502, "Unexpected non-object events response."
+            )
+
+        events = _as_object_list(payload.get("events"))
+        signed_events = [event for event in events if event.get("eventType") == 10]
+        process_ids = _unique_strings(
+            _string_value(event, "processId") for event in signed_events
+        )
+        processes = [
+            _get_process_details(
+                client,
+                settings,
+                token,
+                api_key,
+                org_id,
+                process_id,
+                flat=True,
+            )
+            for process_id in process_ids
+        ]
+        events_by_process_id = _events_by_process_id(signed_events)
+        signed_documents = [
+            signed_document
+            for process in processes
+            for signed_document in _signed_documents_from_process(
+                process,
+                events_by_process_id.get(_string_value(process, "id") or "", []),
+            )
+        ]
+
+    signed_documents.sort(
+        key=lambda document: document.signed_at or document.event_created_at or "",
+        reverse=True,
+    )
+    return KedoSignedDocumentsResponse(
+        org_id=org_id,
+        last_offset=_string_value(payload, "lastOffset"),
+        signed_documents=signed_documents,
+    )
+
+
 def download_content(
     settings: Settings,
     *,
@@ -1068,23 +1167,46 @@ def _get_created_process_details(
 ) -> list[dict[str, Any]]:
     details: list[dict[str, Any]] = []
     for process_id in process_ids:
-        response = _request(
-            client,
-            "Get KEDO signing process",
-            "GET",
-            _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/processes/{process_id}"),
-            headers=_json_headers(access_token, api_key),
-            params={"flat": False, "includeCandidateTargets": False},
-        )
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise KedoApiError(
-                "Get KEDO signing process",
-                502,
-                "Unexpected non-object process response.",
+        details.append(
+            _get_process_details(
+                client,
+                settings,
+                access_token,
+                api_key,
+                org_id,
+                process_id,
+                flat=False,
             )
-        details.append(dict(payload))
+        )
     return details
+
+
+def _get_process_details(
+    client: httpx.Client,
+    settings: Settings,
+    access_token: str,
+    api_key: str,
+    org_id: str,
+    process_id: str,
+    *,
+    flat: bool,
+) -> dict[str, Any]:
+    response = _request(
+        client,
+        "Get KEDO signing process",
+        "GET",
+        _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/processes/{process_id}"),
+        headers=_json_headers(access_token, api_key),
+        params={"flat": flat, "includeCandidateTargets": False},
+    )
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise KedoApiError(
+            "Get KEDO signing process",
+            502,
+            "Unexpected non-object process response.",
+        )
+    return dict(payload)
 
 
 def _storage_download_stage(
@@ -1151,6 +1273,128 @@ def _first_sign_route_node(process: dict[str, Any]) -> dict[str, Any]:
         node = next_node if isinstance(next_node, dict) else {}
 
     return {}
+
+
+def _signed_documents_from_process(
+    process: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> list[KedoSignedDocument]:
+    process_id = _string_value(process, "id")
+    if not process_id:
+        return []
+
+    signed_documents: list[KedoSignedDocument] = []
+    event = events[0] if events else {}
+    for node in _process_sign_path_nodes(process):
+        for document_key, signed_content in _signed_contents(node):
+            signature_wrapper = signed_content.get("signature")
+            if not isinstance(signature_wrapper, dict):
+                continue
+            signature = signature_wrapper.get("signature")
+            if not isinstance(signature, dict):
+                continue
+            signed_at = _string_value(signature, "createdAt")
+            if not signed_at:
+                continue
+
+            document = _process_document_by_key(process, document_key)
+            content = document.get("content")
+            content_payload = content if isinstance(content, dict) else {}
+            author = signature.get("author")
+            author_payload = author if isinstance(author, dict) else {}
+            author_user = author_payload.get("user")
+            author_user_payload = author_user if isinstance(author_user, dict) else {}
+
+            signed_documents.append(
+                KedoSignedDocument(
+                    process_id=process_id,
+                    process_name=_string_value(process, "name"),
+                    process_created_at=_string_value(process, "createdAt"),
+                    document_key=document_key,
+                    document_id=_string_value(document, "id"),
+                    document_name=_string_value(content_payload, "name"),
+                    signed_at=signed_at,
+                    action=_string_value(signature, "action"),
+                    signature_id=_string_value(signature, "id"),
+                    signature_location=_string_value(signature, "location"),
+                    signer_employee_id=_string_value(author_payload, "employeeId"),
+                    signer_user_id=_string_value(author_payload, "userId")
+                    or _string_value(author_user_payload, "userId"),
+                    is_checked=_bool_value(signature_wrapper, "isChecked"),
+                    is_valid=_bool_value(signature_wrapper, "isValid"),
+                    event_id=_string_value(event, "eventId"),
+                    event_created_at=_string_value(event, "createdAt"),
+                )
+            )
+
+    return signed_documents
+
+
+def _process_sign_path_nodes(process: dict[str, Any]) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
+
+    flat_path = process.get("flatPath")
+    if isinstance(flat_path, dict):
+        flat_nodes = flat_path.get("nodes")
+        if isinstance(flat_nodes, list):
+            nodes.extend(
+                node
+                for node in flat_nodes
+                if isinstance(node, dict) and _string_value(node, "type") == "Sign"
+            )
+
+    path = process.get("path")
+    if isinstance(path, dict):
+        node = path.get("firstNode")
+        while isinstance(node, dict):
+            if _string_value(node, "type") == "Sign":
+                nodes.append(node)
+            next_node = node.get("next")
+            node = next_node if isinstance(next_node, dict) else {}
+
+    return nodes
+
+
+def _signed_contents(node: dict[str, Any]) -> list[tuple[int | None, dict[str, Any]]]:
+    signed_contents = node.get("signedContents")
+    if not isinstance(signed_contents, dict):
+        return []
+
+    return [
+        (_optional_int(raw_key), signed_content)
+        for raw_key, signed_content in signed_contents.items()
+        if isinstance(signed_content, dict)
+    ]
+
+
+def _process_document_by_key(
+    process: dict[str, Any],
+    document_key: int | None,
+) -> dict[str, Any]:
+    documents = process.get("documents")
+    if isinstance(documents, dict):
+        document = documents.get(str(document_key)) if document_key is not None else None
+        if isinstance(document, dict):
+            return document
+
+    flat_documents = process.get("flatDocuments")
+    if isinstance(flat_documents, list):
+        for document in flat_documents:
+            if not isinstance(document, dict):
+                continue
+            if _optional_int(document.get("documentKey")) == document_key:
+                return document
+
+    return {}
+
+
+def _events_by_process_id(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        process_id = _string_value(event, "processId")
+        if process_id:
+            result.setdefault(process_id, []).append(event)
+    return result
 
 
 def _recent_document_summary(
@@ -1553,6 +1797,22 @@ def _required_string(payload: dict[str, Any], key: str) -> str:
 def _string_value(payload: dict[str, Any], key: str) -> str | None:
     value = payload.get(key)
     return value if isinstance(value, str) and value else None
+
+
+def _bool_value(payload: dict[str, Any], key: str) -> bool | None:
+    value = payload.get(key)
+    return value if isinstance(value, bool) else None
+
+
+def _unique_strings(values: Iterable[str | None]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _optional_int(value: Any) -> int | None:

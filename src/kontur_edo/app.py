@@ -21,12 +21,14 @@ from kontur_edo.kedo_client import (
     KedoEmployeesResponse,
     KedoRecentDocumentsCompareResponse,
     KedoSignatureTypesResponse,
+    KedoSignedDocumentsResponse,
     KedoStorageTestResponse,
     KedoTestDocumentResponse,
     check_connectivity,
     compare_recent_documents,
     download_content,
     download_document_print,
+    get_signed_documents,
     send_test_document,
     test_temporary_storage,
 )
@@ -163,6 +165,9 @@ def index() -> str:
         <button id="load-kedo-signature-types" class="secondary">Получить типы подписи</button>
         <button id="test-kedo-storage" class="secondary">Проверить временное хранилище</button>
         <button id="compare-kedo-documents" class="secondary">Сравнить последние документы</button>
+        <button id="check-kedo-signatures" class="secondary">
+          Проверить подписание документов
+        </button>
         <button id="send-kedo-test" class="ghost">Отправить тестовый файл в КЭДО</button>
       </div>
     </header>
@@ -199,6 +204,7 @@ def index() -> str:
     const signatureTypesButton = document.getElementById("load-kedo-signature-types");
     const storageTestButton = document.getElementById("test-kedo-storage");
     const compareDocumentsButton = document.getElementById("compare-kedo-documents");
+    const checkSignaturesButton = document.getElementById("check-kedo-signatures");
     const kedoButton = document.getElementById("send-kedo-test");
     const kedoDocumentTypeInput = document.getElementById("kedo-document-type-id");
     const kedoSenderInput = document.getElementById("kedo-sender-id");
@@ -213,6 +219,7 @@ def index() -> str:
       signatureTypesButton,
       storageTestButton,
       compareDocumentsButton,
+      checkSignaturesButton,
       kedoButton
     ];
     const statusNode = document.getElementById("status");
@@ -425,6 +432,46 @@ def index() -> str:
       bindSignatureTypeButtons();
     }
 
+    function renderKedoSignedDocuments(data) {
+      const rows = (data.signed_documents || []).map((document) => {
+        const signerId = document.signer_employee_id || document.signer_user_id || "";
+        const isValid = document.is_valid === null || document.is_valid === undefined
+          ? ""
+          : formatBoolean(document.is_valid);
+        return `
+        <tr>
+          <td>${escapeHtml(document.signed_at)}</td>
+          <td>${escapeHtml(document.action || "")}</td>
+          <td>${escapeHtml(document.process_name || "")}</td>
+          <td><code>${escapeHtml(document.process_id)}</code></td>
+          <td>${escapeHtml(document.document_name || "")}</td>
+          <td><code>${escapeHtml(document.document_id || "")}</code></td>
+          <td><code>${escapeHtml(signerId)}</code></td>
+          <td>${isValid}</td>
+        </tr>
+      `;
+      }).join("");
+
+      contentNode.innerHTML = rows ? `
+        <table>
+          <thead>
+            <tr>
+              <th>Дата подписи</th>
+              <th>Действие</th>
+              <th>Процесс</th>
+              <th>ProcessId</th>
+              <th>Документ</th>
+              <th>DocumentId</th>
+              <th>Подписант</th>
+              <th>Подпись валидна</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <p class="muted">lastOffset: <code>${escapeHtml(data.last_offset || "")}</code></p>
+      ` : `<span class="muted">Подписанные документы в последних событиях КЭДО не найдены.</span>`;
+    }
+
     function readFileAsBase64(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -539,6 +586,12 @@ def index() -> str:
       "/api/kedo/recent-documents/compare?limit=2",
       renderJsonDetails,
       (data) => `Получено документов для сравнения: ${(data.documents || []).length}`
+    ));
+
+    checkSignaturesButton.addEventListener("click", () => loadData(
+      "/api/kedo/signed-documents?limit=100",
+      renderKedoSignedDocuments,
+      (data) => `Найдено подписанных документов: ${(data.signed_documents || []).length}`
     ));
 
     kedoFileInput.addEventListener("change", () => {
@@ -722,6 +775,21 @@ def kedo_compare_recent_documents(
 ) -> KedoRecentDocumentsCompareResponse:
     try:
         return compare_recent_documents(get_settings(), limit=limit)
+    except KedoApiError as error:
+        raise _to_http_exception(error) from error
+    except KedoAuthError as error:
+        raise HTTPException(status_code=401, detail=str(error)) from error
+    except httpx.HTTPError as error:
+        raise _to_network_http_exception("Kontur KEDO API", error) from error
+
+
+@app.get("/api/kedo/signed-documents", response_model=KedoSignedDocumentsResponse)
+def kedo_signed_documents(
+    limit: int = Query(default=100, ge=1, le=100),
+    offset: str | None = Query(default=None),
+) -> KedoSignedDocumentsResponse:
+    try:
+        return get_signed_documents(get_settings(), limit=limit, offset=offset)
     except KedoApiError as error:
         raise _to_http_exception(error) from error
     except KedoAuthError as error:
