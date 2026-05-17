@@ -683,7 +683,7 @@ def test_get_document_types_uses_bounded_filtered_query(monkeypatch) -> None:
     assert response.document_types[0].name == "Несчастный случай"
 
 
-def test_get_document_types_returns_first_500_without_filter(monkeypatch) -> None:
+def test_get_document_types_returns_first_20_without_filter(monkeypatch) -> None:
     calls = []
 
     class FakeClient:
@@ -710,7 +710,7 @@ def test_get_document_types_returns_first_500_without_filter(monkeypatch) -> Non
                             "id": f"00000000-0000-0000-0000-{offset + index:012d}",
                             "name": f"Document {offset + index}",
                         }
-                        for index in range(100)
+                        for index in range(20)
                     ]
                 },
             )
@@ -722,11 +722,11 @@ def test_get_document_types_returns_first_500_without_filter(monkeypatch) -> Non
         access_token="token",
     )
 
-    assert sorted(call["offset"] for call in calls) == [0, 100, 200, 300, 400]
-    assert all(call["limit"] == 100 for call in calls)
+    assert [call["offset"] for call in calls] == [0]
+    assert all(call["limit"] == 20 for call in calls)
     assert all(call["includeSystems"] is True for call in calls)
-    assert len(response.document_types) == 500
-    assert response.document_types[-1].name == "Document 499"
+    assert len(response.document_types) == 20
+    assert response.document_types[-1].name == "Document 19"
 
 
 def test_get_document_types_returns_filtered_matches_after_late_timeout(monkeypatch) -> None:
