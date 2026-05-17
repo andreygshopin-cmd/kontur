@@ -859,7 +859,7 @@ def test_get_signed_documents_reads_signature_events(monkeypatch) -> None:
         def request(self, method, url, **kwargs):
             if url.endswith("/processes/events/query"):
                 assert method == "POST"
-                assert kwargs["json"]["limit"] == 100
+                assert kwargs["json"]["limit"] == 25
                 assert kwargs["json"]["inverted"] is True
                 assert kwargs["json"]["includeHiringEvents"] is False
                 assert set(kwargs["json"]["eventTimeRange"]) == {"from", "to"}
@@ -933,6 +933,7 @@ def test_get_signed_documents_reads_signature_events(monkeypatch) -> None:
     response = get_signed_documents(
         Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
         access_token="token",
+        days=1,
     )
 
     assert response.org_id == "org-id"
@@ -1027,6 +1028,7 @@ def test_get_signed_documents_paginates_events_for_full_window(monkeypatch) -> N
     response = get_signed_documents(
         Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
         access_token="token",
+        days=1,
     )
 
     assert len(event_queries) == 2
@@ -1034,6 +1036,81 @@ def test_get_signed_documents_paginates_events_for_full_window(monkeypatch) -> N
     assert event_queries[1]["offset"] == "next-offset"
     assert response.last_offset == "final-offset"
     assert len(response.raw_events) == 101
+    assert len(response.raw_signed_events) == 1
+    assert len(response.signed_documents) == 1
+
+
+def test_get_signed_documents_splits_event_range_after_timeout(monkeypatch) -> None:
+    event_queries = []
+    emitted_event = False
+
+    class FakeClient:
+        def __init__(self, *, base_url, timeout) -> None:
+            self.base_url = base_url
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def request(self, method, url, **kwargs):
+            nonlocal emitted_event
+            if url.endswith("/processes/events/query"):
+                event_queries.append(kwargs["json"])
+                if len(event_queries) == 1:
+                    raise kedo_client_module.httpx.ReadTimeout("timed out")
+                if emitted_event:
+                    return kedo_client_module.httpx.Response(200, json={"events": []})
+                emitted_event = True
+                return kedo_client_module.httpx.Response(
+                    200,
+                    json={
+                        "events": [
+                            {
+                                "eventType": 10,
+                                "processId": "process-id",
+                                "eventId": "event-id",
+                            }
+                        ],
+                    },
+                )
+            if url.endswith("/processes/process-id"):
+                return kedo_client_module.httpx.Response(
+                    200,
+                    json={
+                        "id": "process-id",
+                        "flatPath": {
+                            "nodes": [
+                                {
+                                    "type": "Sign",
+                                    "signedContents": {
+                                        "0": {
+                                            "signature": {
+                                                "signature": {
+                                                    "createdAt": "2026-05-17T12:34:56Z"
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
+                            ]
+                        },
+                    },
+                )
+            raise AssertionError(f"Unexpected request URL: {url}")
+
+    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
+
+    response = get_signed_documents(
+        Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
+        access_token="token",
+        days=1,
+    )
+
+    assert len(event_queries) > 1
+    assert response.event_query_errors == []
     assert len(response.raw_signed_events) == 1
     assert len(response.signed_documents) == 1
 

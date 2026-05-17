@@ -478,6 +478,7 @@ def index() -> str:
         raw_events: data.raw_events || [],
         raw_signed_events: data.raw_signed_events || [],
         raw_processes: data.raw_processes || [],
+        event_query_errors: data.event_query_errors || [],
         process_errors: data.process_errors || [],
         signed_documents: data.signed_documents || []
       };
@@ -652,7 +653,8 @@ def index() -> str:
       renderKedoSignedDocuments,
       (data) => `Найдено подписанных документов: ${(data.signed_documents || []).length}; ` +
         `событий подписи: ${(data.raw_signed_events || []).length}; ` +
-        `всего событий за 14 дней: ${(data.raw_events || []).length}`
+        `всего событий за 14 дней: ${(data.raw_events || []).length}; ` +
+        `ошибок запросов: ${(data.event_query_errors || []).length}`
     ));
 
     kedoFileInput.addEventListener("change", () => {
