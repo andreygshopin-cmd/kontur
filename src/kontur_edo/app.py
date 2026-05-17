@@ -1,6 +1,9 @@
 import base64
 import binascii
+import os
+from datetime import UTC, datetime
 from functools import lru_cache
+from html import escape
 from pathlib import PurePosixPath, PureWindowsPath
 from urllib.parse import quote
 
@@ -42,10 +45,18 @@ DEFAULT_KEDO_DOCUMENT_TYPE_ID = "00000000-0000-0000-0000-000000000001"
 DEFAULT_KEDO_TEST_FILENAME = "document.pdf"
 INVALID_FILENAME_CHARS = set('<>:"/\\|?*')
 DEFAULT_KEDO_FILE_EXTENSION = "pdf"
+APP_STARTED_AT = datetime.now(UTC)
 
 
 class HealthResponse(BaseModel):
     status: str
+
+
+class DeploymentInfoResponse(BaseModel):
+    deployed_at: str
+    deployed_at_display: str
+    source: str
+    git_commit: str | None = None
 
 
 class KedoTestDocumentRequest(BaseModel):
@@ -72,6 +83,7 @@ app = FastAPI(
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
+    deployment_info = _deployment_info()
     return """
 <!doctype html>
 <html lang="ru">
@@ -84,7 +96,9 @@ def index() -> str:
     body { margin: 0; background: #f6f7f9; color: #1f2933; }
     main { max-width: 980px; margin: 0 auto; padding: 40px 20px; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .title-stack { display: grid; gap: 6px; }
     h1 { margin: 0; font-size: 28px; line-height: 1.2; }
+    .deploy-info { color: #667085; font-size: 14px; line-height: 1.35; }
     .actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
     .action-field { display: grid; gap: 4px; min-width: 180px; }
     .action-field input { padding: 10px 12px; }
@@ -132,7 +146,10 @@ def index() -> str:
 <body>
   <main>
     <header>
-      <h1>Контур КЭДО</h1>
+      <div class="title-stack">
+        <h1>Контур КЭДО</h1>
+        __DEPLOY_INFO_HTML__
+      </div>
       <div class="actions">
         <button id="check-kedo" class="secondary">Проверить КЭДО API</button>
         <label class="action-field" for="kedo-document-type-filter">
@@ -626,12 +643,17 @@ def index() -> str:
   </script>
 </body>
 </html>
-"""
+""".replace("__DEPLOY_INFO_HTML__", _deployment_info_html(deployment_info))
 
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
+
+
+@app.get("/api/deployment", response_model=DeploymentInfoResponse)
+def deployment_info() -> DeploymentInfoResponse:
+    return _deployment_info()
 
 
 @app.post("/api/kedo/test-document", response_model=KedoTestDocumentResponse)
@@ -795,6 +817,59 @@ def kedo_employees() -> KedoEmployeesResponse:
 @app.get("/api/kedo/signature-types", response_model=KedoSignatureTypesResponse)
 def kedo_signature_types() -> KedoSignatureTypesResponse:
     return get_kedo_signature_types(get_settings())
+
+
+def _deployment_info() -> DeploymentInfoResponse:
+    raw_deployed_at = os.getenv("KONTUR_DEPLOYED_AT") or os.getenv("RENDER_DEPLOYED_AT")
+    if raw_deployed_at:
+        deployed_at, deployed_at_display = _normalize_deployment_time(raw_deployed_at)
+        source = "environment"
+    else:
+        deployed_at = _format_deployment_iso(APP_STARTED_AT)
+        deployed_at_display = _format_deployment_display(APP_STARTED_AT)
+        source = "process_start"
+
+    return DeploymentInfoResponse(
+        deployed_at=deployed_at,
+        deployed_at_display=deployed_at_display,
+        source=source,
+        git_commit=_non_empty(os.getenv("RENDER_GIT_COMMIT")),
+    )
+
+
+def _deployment_info_html(deployment: DeploymentInfoResponse) -> str:
+    commit_text = f" - commit {escape(deployment.git_commit[:7])}" if deployment.git_commit else ""
+    return (
+        '<div id="deploy-info" class="deploy-info">'
+        "Последний деплой: "
+        f'<time datetime="{escape(deployment.deployed_at)}">'
+        f"{escape(deployment.deployed_at_display)}</time>{commit_text}</div>"
+    )
+
+
+def _normalize_deployment_time(value: str) -> tuple[str, str]:
+    parsed = _parse_deployment_time(value)
+    if parsed is None:
+        return value, value
+    return _format_deployment_iso(parsed), _format_deployment_display(parsed)
+
+
+def _parse_deployment_time(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _format_deployment_iso(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _format_deployment_display(value: datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def _non_empty_or(value: str | None, default: str) -> str:

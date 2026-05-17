@@ -46,6 +46,7 @@ def test_index_has_only_kedo_controls() -> None:
     response = client.get("/")
 
     assert response.status_code == 200
+    assert 'id="deploy-info"' in response.text
     assert "Проверить КЭДО API" in response.text
     assert "Фильтр типов документов" in response.text
     assert 'id="kedo-document-type-filter"' in response.text
@@ -68,6 +69,32 @@ def test_index_has_only_kedo_controls() -> None:
     assert "Войти в Контур" not in response.text
     assert "Получить организации" not in response.text
     assert "Получить личные данные" not in response.text
+
+
+def test_deployment_info_uses_deploy_environment(monkeypatch) -> None:
+    monkeypatch.setenv("KONTUR_DEPLOYED_AT", "2026-05-17T12:30:40Z")
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "abcdef1234567890")
+
+    response = client.get("/api/deployment")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "deployed_at": "2026-05-17T12:30:40Z",
+        "deployed_at_display": "2026-05-17 12:30:40 UTC",
+        "source": "environment",
+        "git_commit": "abcdef1234567890",
+    }
+
+
+def test_index_shows_deployment_info(monkeypatch) -> None:
+    monkeypatch.setenv("KONTUR_DEPLOYED_AT", "2026-05-17T12:30:40Z")
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "abcdef1234567890")
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "2026-05-17 12:30:40 UTC" in response.text
+    assert "commit abcdef1" in response.text
 
 
 def test_kedo_test_document(monkeypatch) -> None:
