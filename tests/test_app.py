@@ -672,11 +672,11 @@ def test_get_document_types_uses_bounded_filtered_query(monkeypatch) -> None:
 
     assert calls == [
         {
-            "limit": 100,
+            "limit": 20,
             "offset": 0,
             "includeDeleted": False,
             "includeDisabled": False,
-            "includeSystems": True,
+            "includeSystems": False,
         }
     ]
     assert len(response.document_types) == 1
@@ -728,7 +728,7 @@ def test_get_document_types_returns_filtered_matches_after_late_timeout(monkeypa
     assert response.document_types[0].name == "Несчастный случай"
 
 
-def test_get_document_types_retries_filtered_query_without_system_types(monkeypatch) -> None:
+def test_get_document_types_tries_system_types_after_no_matches(monkeypatch) -> None:
     include_systems_values = []
 
     class FakeClient:
@@ -745,8 +745,18 @@ def test_get_document_types_retries_filtered_query_without_system_types(monkeypa
         def request(self, method, url, **kwargs):
             include_systems = kwargs["params"]["includeSystems"]
             include_systems_values.append(include_systems)
-            if include_systems:
-                raise kedo_client_module.httpx.ReadTimeout("timed out")
+            if not include_systems:
+                return kedo_client_module.httpx.Response(
+                    200,
+                    json={
+                        "result": [
+                            {
+                                "id": "33333333-3333-3333-3333-333333333333",
+                                "name": "Other document",
+                            }
+                        ]
+                    },
+                )
             return kedo_client_module.httpx.Response(
                 200,
                 json={
@@ -767,9 +777,40 @@ def test_get_document_types_retries_filtered_query_without_system_types(monkeypa
         filter_text="Несчастн",
     )
 
-    assert include_systems_values == [True, False]
+    assert include_systems_values == [False, True]
     assert len(response.document_types) == 1
     assert response.document_types[0].name == "Несчастный случай"
+
+
+def test_get_document_types_returns_empty_filtered_result_after_timeout(monkeypatch) -> None:
+    calls = 0
+
+    class FakeClient:
+        def __init__(self, *, base_url, timeout) -> None:
+            self.base_url = base_url
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def request(self, method, url, **kwargs):
+            nonlocal calls
+            calls += 1
+            raise kedo_client_module.httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
+
+    response = get_document_types(
+        Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
+        access_token="token",
+        filter_text="test",
+    )
+
+    assert calls == 2
+    assert response.document_types == []
 
 
 def test_kedo_employees(monkeypatch) -> None:
