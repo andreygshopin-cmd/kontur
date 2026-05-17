@@ -2,10 +2,11 @@ import base64
 import binascii
 from functools import lru_cache
 from pathlib import PurePosixPath, PureWindowsPath
+from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from kontur_edo.kedo_client import (
@@ -18,6 +19,8 @@ from kontur_edo.kedo_client import (
     KedoSignatureTypesResponse,
     KedoTestDocumentResponse,
     check_connectivity,
+    download_content,
+    download_document_print,
     send_test_document,
 )
 from kontur_edo.kedo_client import (
@@ -516,6 +519,24 @@ def index() -> str:
       const rawResponse = JSON.stringify(data.raw_response || [], null, 2);
       const requestPayload = JSON.stringify(data.request_payload || {}, null, 2);
       const processDetails = JSON.stringify(data.process_details || [], null, 2);
+      const downloadChecks = JSON.stringify(data.download_checks || [], null, 2);
+      const firstProcessId = (data.process_ids || [])[0] || "";
+      const firstDocumentId = (data.document_ids || [])[0] || "";
+      const safeFileName = encodeURIComponent(data.file_name || "document.pdf");
+      const contentDownloadUrl = processedContentLocation
+        ? `/api/kedo/contents/${encodeURIComponent(processedContentLocation)}`
+          + `?filename=${safeFileName}`
+        : "";
+      const printDownloadUrl = firstProcessId && firstDocumentId
+        ? `/api/kedo/processes/${encodeURIComponent(firstProcessId)}`
+          + `/documents/${encodeURIComponent(firstDocumentId)}/print`
+        : "";
+      const contentLink = contentDownloadUrl
+        ? `<a href="${contentDownloadUrl}" target="_blank">Открыть</a>`
+        : "";
+      const printLink = printDownloadUrl
+        ? `<a href="${printDownloadUrl}" target="_blank">Открыть</a>`
+        : "";
       contentNode.innerHTML = `
         <div class="details">
           <div class="label">Организация</div><div><code>${escapeHtml(data.org_id)}</code></div>
@@ -531,6 +552,12 @@ def index() -> str:
           <div><code>${escapeHtml((data.process_ids || []).join(", "))}</code></div>
           <div class="label">Document ID</div>
           <div><code>${escapeHtml((data.document_ids || []).join(", "))}</code></div>
+          <div class="label">Скачать content</div>
+          <div>${contentLink}</div>
+          <div class="label">Скачать print</div>
+          <div>${printLink}</div>
+          <div class="label">Проверка скачивания</div>
+          <pre class="json-block"><code>${escapeHtml(downloadChecks)}</code></pre>
           <div class="label">Запрос процесса</div>
           <pre class="json-block"><code>${escapeHtml(requestPayload)}</code></pre>
           <div class="label">Ответ КЭДО</div>
@@ -585,6 +612,46 @@ def kedo_test_document(
         raise _to_http_exception(error) from error
     except httpx.HTTPError as error:
         raise _to_network_http_exception("Kontur KEDO API", error) from error
+
+
+@app.get("/api/kedo/contents/{file_id}")
+def kedo_download_content(
+    file_id: str,
+    filename: str | None = Query(default=None),
+) -> Response:
+    try:
+        file = download_content(
+            get_settings(),
+            file_id=file_id,
+            file_name=_safe_file_name(filename or DEFAULT_KEDO_TEST_FILENAME),
+        )
+    except KedoApiError as error:
+        raise _to_http_exception(error) from error
+    except KedoAuthError as error:
+        raise HTTPException(status_code=401, detail=str(error)) from error
+    except httpx.HTTPError as error:
+        raise _to_network_http_exception("Kontur KEDO API", error) from error
+
+    return _download_response(file.content, file.content_type, file.file_name)
+
+
+@app.get("/api/kedo/processes/{process_id}/documents/{document_id}/print")
+def kedo_download_document_print(process_id: str, document_id: str) -> Response:
+    try:
+        file = download_document_print(
+            get_settings(),
+            process_id=process_id,
+            document_id=document_id,
+            file_name=f"{document_id}.pdf",
+        )
+    except KedoApiError as error:
+        raise _to_http_exception(error) from error
+    except KedoAuthError as error:
+        raise HTTPException(status_code=401, detail=str(error)) from error
+    except httpx.HTTPError as error:
+        raise _to_network_http_exception("Kontur KEDO API", error) from error
+
+    return _download_response(file.content, file.content_type, file.file_name)
 
 
 @app.get("/api/kedo/connectivity", response_model=KedoConnectivityResponse)
@@ -695,6 +762,19 @@ def _decode_file_content(file_content_base64: str | None) -> bytes | None:
         return base64.b64decode(file_content_base64, validate=True)
     except binascii.Error as error:
         raise HTTPException(status_code=400, detail="Invalid file_content_base64.") from error
+
+
+def _download_response(content: bytes, content_type: str, file_name: str) -> Response:
+    safe_name = _safe_file_name(file_name)
+    quoted_name = quote(safe_name)
+    content_disposition = (
+        f"attachment; filename={quoted_name}; filename*=UTF-8''{quoted_name}"
+    )
+    return Response(
+        content=content,
+        media_type=content_type or "application/octet-stream",
+        headers={"Content-Disposition": content_disposition},
+    )
 
 
 def _to_http_exception(error: KedoApiError) -> HTTPException:

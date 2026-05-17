@@ -12,6 +12,7 @@ from kontur_edo.kedo_client import (
     KedoConnectivityResponse,
     KedoDocumentType,
     KedoDocumentTypesResponse,
+    KedoDownloadedFile,
     KedoEmployee,
     KedoEmployeesResponse,
     KedoSignatureTypesResponse,
@@ -216,6 +217,61 @@ def test_kedo_test_document_rejects_invalid_file_base64() -> None:
     assert response.json()["detail"] == "Invalid file_content_base64."
 
 
+def test_kedo_download_content(monkeypatch) -> None:
+    def fake_download_content(_settings, *, file_id, file_name, access_token=None):
+        assert file_id == "44444444-4444-4444-4444-444444444444"
+        assert file_name == "test.pdf"
+        assert access_token is None
+        return KedoDownloadedFile(
+            content=b"%PDF-content",
+            content_type="application/pdf",
+            file_name=file_name,
+        )
+
+    monkeypatch.setattr(app_module, "download_content", fake_download_content)
+
+    response = client.get(
+        "/api/kedo/contents/44444444-4444-4444-4444-444444444444",
+        params={"filename": "test.pdf"},
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"%PDF-content"
+    assert response.headers["content-type"] == "application/pdf"
+    assert "test.pdf" in response.headers["content-disposition"]
+
+
+def test_kedo_download_document_print(monkeypatch) -> None:
+    def fake_download_document_print(
+        _settings,
+        *,
+        process_id,
+        document_id,
+        file_name,
+        access_token=None,
+    ):
+        assert process_id == "55555555-5555-5555-5555-555555555555"
+        assert document_id == "66666666-6666-6666-6666-666666666666"
+        assert file_name == "66666666-6666-6666-6666-666666666666.pdf"
+        assert access_token is None
+        return KedoDownloadedFile(
+            content=b"%PDF-print",
+            content_type="application/pdf",
+            file_name=file_name,
+        )
+
+    monkeypatch.setattr(app_module, "download_document_print", fake_download_document_print)
+
+    response = client.get(
+        "/api/kedo/processes/55555555-5555-5555-5555-555555555555"
+        "/documents/66666666-6666-6666-6666-666666666666/print"
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"%PDF-print"
+    assert response.headers["content-type"] == "application/pdf"
+
+
 def test_send_test_document_uses_processed_content(monkeypatch) -> None:
     process_payloads = []
 
@@ -283,6 +339,23 @@ def test_send_test_document_uses_processed_content(monkeypatch) -> None:
                         },
                     },
                 )
+            if url.endswith("/contents/processed-location"):
+                assert method == "GET"
+                return kedo_client_module.httpx.Response(
+                    200,
+                    content=b"%PDF-content",
+                    headers={"content-type": "application/pdf"},
+                )
+            if url.endswith("/processes/process-id/documents/document-id/print/tasks"):
+                assert method == "POST"
+                return kedo_client_module.httpx.Response(
+                    200,
+                    json={
+                        "taskId": "print-task-id",
+                        "status": "Complete",
+                        "bytes": "JVBERi1wcmludA==",
+                    },
+                )
             raise AssertionError(f"Unexpected request URL: {url}")
 
     monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
@@ -310,6 +383,8 @@ def test_send_test_document_uses_processed_content(monkeypatch) -> None:
     assert response.processed_content_location == "processed-location"
     assert response.document_ids == ["document-id"]
     assert response.request_payload == process_payloads[0]
+    assert [check.method for check in response.download_checks] == ["contents", "print"]
+    assert all(check.ok for check in response.download_checks)
 
 
 def test_send_test_document_requires_processed_content(monkeypatch) -> None:

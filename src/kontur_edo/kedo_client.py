@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import socket
 import ssl
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter, sleep
 from typing import Any
@@ -72,6 +75,15 @@ class KedoDocumentTypesResponse(BaseModel):
     document_types: list[KedoDocumentType]
 
 
+class KedoDownloadCheck(BaseModel):
+    method: str
+    ok: bool
+    status_code: int
+    size: int | None = None
+    content_type: str | None = None
+    message: str | None = None
+
+
 class KedoTestDocumentResponse(BaseModel):
     org_id: str
     employee_id: str
@@ -84,6 +96,7 @@ class KedoTestDocumentResponse(BaseModel):
     raw_response: list[dict[str, Any]]
     request_payload: dict[str, Any] | None = None
     process_details: list[dict[str, Any]] = Field(default_factory=list)
+    download_checks: list[KedoDownloadCheck] = Field(default_factory=list)
 
 
 class KedoConnectivityResponse(BaseModel):
@@ -98,6 +111,13 @@ class KedoConnectivityResponse(BaseModel):
     tls_version: str | None = None
     tls_error: str | None = None
     elapsed_ms: int
+
+
+@dataclass(frozen=True)
+class KedoDownloadedFile:
+    content: bytes
+    content_type: str
+    file_name: str
 
 
 def send_test_document(
@@ -202,6 +222,14 @@ def send_test_document(
             f"Created document is still a draft: {', '.join(draft_document_ids)}.",
         )
 
+    download_checks = _check_created_document_downloads(
+        settings,
+        access_token=token,
+        process_id=process_ids[0] if process_ids else None,
+        document_id=document_ids[0] if document_ids else None,
+        content_location=_string_value(processed_content, "location"),
+    )
+
     return KedoTestDocumentResponse(
         org_id=org_id,
         employee_id=employee_id,
@@ -214,6 +242,7 @@ def send_test_document(
         raw_response=raw_processes,
         request_payload=process_payload,
         process_details=process_details,
+        download_checks=download_checks,
     )
 
 
@@ -419,6 +448,52 @@ def get_employees(
 
 def get_signature_types(settings: Settings) -> KedoSignatureTypesResponse:
     return KedoSignatureTypesResponse(signature_types=_signature_types(settings))
+
+
+def download_content(
+    settings: Settings,
+    *,
+    file_id: str,
+    file_name: str = "document.bin",
+    access_token: str | None = None,
+) -> KedoDownloadedFile:
+    token = access_token or authenticate_with_password(settings)
+    api_key = _api_key(settings)
+    with httpx.Client(base_url=_base_url(settings), timeout=60.0) as client:
+        org_id = settings.kedo_org_id or _get_first_organization(
+            client, settings, token, api_key
+        ).id
+        return _download_content(client, settings, token, api_key, org_id, file_id, file_name)
+
+
+def download_document_print(
+    settings: Settings,
+    *,
+    process_id: str,
+    document_id: str,
+    file_name: str = "document.pdf",
+    access_token: str | None = None,
+) -> KedoDownloadedFile:
+    token = access_token or authenticate_with_password(settings)
+    api_key = _api_key(settings)
+    with httpx.Client(base_url=_base_url(settings), timeout=60.0) as client:
+        org_id = settings.kedo_org_id or _get_first_organization(
+            client, settings, token, api_key
+        ).id
+        content = _download_document_print(
+            client,
+            settings,
+            token,
+            api_key,
+            org_id,
+            process_id,
+            document_id,
+        )
+        return KedoDownloadedFile(
+            content=content,
+            content_type="application/pdf",
+            file_name=file_name,
+        )
 
 
 def _get_first_organization(
@@ -801,6 +876,173 @@ def _get_created_process_details(
             )
         details.append(dict(payload))
     return details
+
+
+def _check_created_document_downloads(
+    settings: Settings,
+    *,
+    access_token: str,
+    process_id: str | None,
+    document_id: str | None,
+    content_location: str | None,
+) -> list[KedoDownloadCheck]:
+    checks: list[KedoDownloadCheck] = []
+    if content_location:
+        checks.append(
+            _download_check(
+                "contents",
+                lambda: download_content(
+                    settings,
+                    access_token=access_token,
+                    file_id=content_location,
+                ),
+            )
+        )
+    if process_id and document_id:
+        checks.append(
+            _download_check(
+                "print",
+                lambda: download_document_print(
+                    settings,
+                    access_token=access_token,
+                    process_id=process_id,
+                    document_id=document_id,
+                ),
+            )
+        )
+    return checks
+
+
+def _download_check(method: str, download: Callable[[], KedoDownloadedFile]) -> KedoDownloadCheck:
+    try:
+        file = download()
+    except KedoApiError as error:
+        return KedoDownloadCheck(
+            method=method,
+            ok=False,
+            status_code=error.status_code,
+            message=error.response_text,
+        )
+
+    return KedoDownloadCheck(
+        method=method,
+        ok=bool(file.content),
+        status_code=200,
+        size=len(file.content),
+        content_type=file.content_type,
+        message=None if file.content else "Empty file.",
+    )
+
+
+def _download_content(
+    client: httpx.Client,
+    settings: Settings,
+    access_token: str,
+    api_key: str,
+    org_id: str,
+    file_id: str,
+    file_name: str,
+) -> KedoDownloadedFile:
+    response = _request(
+        client,
+        "Download KEDO content",
+        "GET",
+        _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/contents/{file_id}"),
+        headers=_json_headers(access_token, api_key),
+    )
+    return KedoDownloadedFile(
+        content=response.content,
+        content_type=response.headers.get("content-type", "application/octet-stream"),
+        file_name=file_name,
+    )
+
+
+def _download_document_print(
+    client: httpx.Client,
+    settings: Settings,
+    access_token: str,
+    api_key: str,
+    org_id: str,
+    process_id: str,
+    document_id: str,
+) -> bytes:
+    response = _request(
+        client,
+        "Start KEDO document print",
+        "POST",
+        _api_path(
+            settings,
+            f"/kedo/api/v1/orgs/{org_id}/processes/{process_id}/documents/{document_id}/print/tasks",
+        ),
+        headers=_json_headers(access_token, api_key),
+    )
+    payload = _wait_for_print_result(
+        client,
+        settings,
+        access_token,
+        api_key,
+        org_id,
+        process_id,
+        document_id,
+        response.json(),
+    )
+    encoded_bytes = _string_value(payload, "bytes")
+    if encoded_bytes is None:
+        raise KedoApiError("Download KEDO document print", 502, "Print result is empty.")
+    try:
+        return base64.b64decode(encoded_bytes, validate=True)
+    except binascii.Error as error:
+        raise KedoApiError(
+            "Download KEDO document print", 502, "Print result is not valid base64."
+        ) from error
+
+
+def _wait_for_print_result(
+    client: httpx.Client,
+    settings: Settings,
+    access_token: str,
+    api_key: str,
+    org_id: str,
+    process_id: str,
+    document_id: str,
+    task_payload: Any,
+    *,
+    timeout_seconds: float = 60.0,
+    poll_interval_seconds: float = 1.0,
+) -> dict[str, Any]:
+    if not isinstance(task_payload, dict):
+        raise KedoApiError("Download KEDO document print", 502, "Unexpected print response.")
+
+    task_id = _string_value(task_payload, "taskId") or _string_value(task_payload, "id")
+    started_at = perf_counter()
+    payload = task_payload
+    while True:
+        status = _string_value(payload, "status")
+        if status == "Complete":
+            return payload
+
+        if status in {"Failed", "Unknown"}:
+            raise KedoApiError("Download KEDO document print", 422, status)
+
+        if not task_id:
+            raise KedoApiError("Download KEDO document print", 502, "Task id is missing.")
+        if perf_counter() - started_at >= timeout_seconds:
+            raise KedoApiError("Download KEDO document print", 504, "Print task timed out.")
+
+        sleep(poll_interval_seconds)
+        response = _request(
+            client,
+            "Get KEDO document print result",
+            "POST",
+            _api_path(
+                settings,
+                f"/kedo/api/v1/orgs/{org_id}/processes/{process_id}/documents/{document_id}/print/tasks/{task_id}",
+            ),
+            headers=_json_headers(access_token, api_key),
+        )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise KedoApiError("Download KEDO document print", 502, "Unexpected print response.")
 
 
 def _process_ids(processes: list[dict[str, Any]]) -> list[str]:
