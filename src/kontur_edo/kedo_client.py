@@ -714,45 +714,30 @@ def get_signed_documents(
     token = access_token or authenticate_with_password(settings)
     api_key = _api_key(settings)
     safe_limit = min(max(limit, 1), 100)
+    safe_offset = _process_query_offset(offset)
+    to_time = datetime.now(UTC)
+    from_time = to_time - timedelta(days=min(max(days or 14, 1), 365))
+    time_range = {
+        "from": _kedo_datetime(from_time),
+        "to": _kedo_datetime(to_time),
+    }
 
     with httpx.Client(base_url=_base_url(settings), timeout=120.0) as client:
         org_id = settings.kedo_org_id or _get_first_organization(
             client, settings, token, api_key
         ).id
-        query: dict[str, Any] = {
-            "limit": safe_limit,
-            "inverted": True,
-            "includeHiringEvents": False,
-        }
-        if days:
-            safe_days = min(max(days, 1), 365)
-            to_time = datetime.now(UTC)
-            query["eventTimeRange"] = {
-                "from": _kedo_datetime(to_time - timedelta(days=safe_days)),
-                "to": _kedo_datetime(to_time),
-            }
-        if offset:
-            query["offset"] = offset
-
         response = _request(
             client,
-            "Query KEDO process events",
+            "Query KEDO processes",
             "POST",
-            _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/processes/events/query"),
+            _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/processes/query"),
+            params={"limit": safe_limit, "offset": safe_offset},
             headers=_json_headers(token, api_key),
-            json=query,
+            json={"timeRange": time_range, "detailedStatuses": ["Signed"]},
         )
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise KedoApiError(
-                "Query KEDO process events", 502, "Unexpected non-object events response."
-            )
-
-        events = _as_object_list(payload.get("events"))
-        signed_events = [event for event in events if event.get("eventType") == 10]
-        process_ids = _unique_strings(
-            _string_value(event, "processId") for event in signed_events
-        )
+        indexed_processes = _paged_result(response.json())
+        indexed_processes.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
+        process_ids = _process_ids(indexed_processes)
         processes = [
             _get_process_details(
                 client,
@@ -765,14 +750,14 @@ def get_signed_documents(
             )
             for process_id in process_ids
         ]
-        events_by_process_id = _events_by_process_id(signed_events)
         signed_documents = [
             signed_document
             for process in processes
             for signed_document in _signed_documents_from_process(
                 process,
-                events_by_process_id.get(_string_value(process, "id") or "", []),
+                [],
             )
+            if _is_kedo_datetime_in_range(signed_document.signed_at, from_time, to_time)
         ]
 
     signed_documents.sort(
@@ -781,7 +766,9 @@ def get_signed_documents(
     )
     return KedoSignedDocumentsResponse(
         org_id=org_id,
-        last_offset=_string_value(payload, "lastOffset"),
+        last_offset=str(safe_offset + len(indexed_processes))
+        if len(indexed_processes) == safe_limit
+        else None,
         signed_documents=signed_documents,
     )
 
@@ -1440,15 +1427,6 @@ def _process_document_by_key(
     return {}
 
 
-def _events_by_process_id(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    result: dict[str, list[dict[str, Any]]] = {}
-    for event in events:
-        process_id = _string_value(event, "processId")
-        if process_id:
-            result.setdefault(process_id, []).append(event)
-    return result
-
-
 def _recent_document_summary(
     client: httpx.Client,
     settings: Settings,
@@ -1870,6 +1848,37 @@ def _unique_strings(values: Iterable[str | None]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _process_query_offset(value: str | None) -> int:
+    if not value:
+        return 0
+    try:
+        return max(int(value), 0)
+    except ValueError:
+        return 0
+
+
+def _is_kedo_datetime_in_range(
+    value: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> bool:
+    parsed = _parse_kedo_datetime(value)
+    if parsed is None:
+        return False
+    return from_time <= parsed <= to_time
+
+
+def _parse_kedo_datetime(value: str) -> datetime | None:
+    try:
+        normalized = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _optional_int(value: Any) -> int | None:

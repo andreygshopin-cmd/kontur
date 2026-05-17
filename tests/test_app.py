@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -842,7 +843,9 @@ def test_kedo_signed_documents(monkeypatch) -> None:
     assert response.json()["signed_documents"][0]["signed_at"] == "2026-05-17T12:34:56Z"
 
 
-def test_get_signed_documents_reads_signature_events(monkeypatch) -> None:
+def test_get_signed_documents_reads_signed_contents_from_recent_processes(monkeypatch) -> None:
+    signed_at = datetime.now(UTC).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     class FakeClient:
         def __init__(self, *, base_url, timeout) -> None:
             self.base_url = base_url
@@ -855,27 +858,16 @@ def test_get_signed_documents_reads_signature_events(monkeypatch) -> None:
             return None
 
         def request(self, method, url, **kwargs):
-            if url.endswith("/processes/events/query"):
+            if url.endswith("/processes/query"):
                 assert method == "POST"
-                assert kwargs["json"]["limit"] == 100
-                assert kwargs["json"]["inverted"] is True
-                assert kwargs["json"]["includeHiringEvents"] is False
-                assert set(kwargs["json"]["eventTimeRange"]) == {"from", "to"}
+                assert kwargs["params"] == {"limit": 100, "offset": 0}
+                assert set(kwargs["json"]["timeRange"]) == {"from", "to"}
+                assert kwargs["json"]["detailedStatuses"] == ["Signed"]
                 return kedo_client_module.httpx.Response(
                     200,
                     json={
-                        "lastOffset": "last-offset-id",
-                        "events": [
-                            {
-                                "eventType": 10,
-                                "processId": "process-id",
-                                "eventId": "event-id",
-                                "createdAt": "2026-05-17T12:35:00Z",
-                            },
-                            {
-                                "eventType": 7,
-                                "processId": "ignored-process-id",
-                            },
+                        "result": [
+                            {"id": "process-id", "createdAt": signed_at},
                         ],
                     },
                 )
@@ -910,7 +902,7 @@ def test_get_signed_documents_reads_signature_events(monkeypatch) -> None:
                                                     "id": "signature-id",
                                                     "action": "Admission",
                                                     "location": "signature-location-id",
-                                                    "createdAt": "2026-05-17T12:34:56Z",
+                                                    "createdAt": signed_at,
                                                     "author": {
                                                         "employeeId": "employee-id",
                                                         "userId": "user-id",
@@ -935,13 +927,13 @@ def test_get_signed_documents_reads_signature_events(monkeypatch) -> None:
     )
 
     assert response.org_id == "org-id"
-    assert response.last_offset == "last-offset-id"
+    assert response.last_offset is None
     assert len(response.signed_documents) == 1
     signed_document = response.signed_documents[0]
     assert signed_document.process_id == "process-id"
     assert signed_document.document_id == "document-id"
     assert signed_document.document_name == "test.pdf"
-    assert signed_document.signed_at == "2026-05-17T12:34:56Z"
+    assert signed_document.signed_at == signed_at
     assert signed_document.action == "Admission"
     assert signed_document.signature_location == "signature-location-id"
     assert signed_document.signer_employee_id == "employee-id"
