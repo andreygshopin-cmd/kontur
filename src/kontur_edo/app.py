@@ -16,12 +16,16 @@ from kontur_edo.kedo_client import (
     KedoDocumentType,
     KedoDocumentTypesResponse,
     KedoEmployeesResponse,
+    KedoRecentDocumentsCompareResponse,
     KedoSignatureTypesResponse,
+    KedoStorageTestResponse,
     KedoTestDocumentResponse,
     check_connectivity,
+    compare_recent_documents,
     download_content,
     download_document_print,
     send_test_document,
+    test_temporary_storage,
 )
 from kontur_edo.kedo_client import (
     get_document_types as get_kedo_document_types,
@@ -140,6 +144,8 @@ def index() -> str:
         </button>
         <button id="load-kedo-employees" class="secondary">Получить сотрудников</button>
         <button id="load-kedo-signature-types" class="secondary">Получить типы подписи</button>
+        <button id="test-kedo-storage" class="secondary">Проверить временное хранилище</button>
+        <button id="compare-kedo-documents" class="secondary">Сравнить последние документы</button>
         <button id="send-kedo-test" class="ghost">Отправить тестовый файл в КЭДО</button>
       </div>
     </header>
@@ -174,6 +180,8 @@ def index() -> str:
     const documentTypesButton = document.getElementById("load-kedo-document-types");
     const employeesButton = document.getElementById("load-kedo-employees");
     const signatureTypesButton = document.getElementById("load-kedo-signature-types");
+    const storageTestButton = document.getElementById("test-kedo-storage");
+    const compareDocumentsButton = document.getElementById("compare-kedo-documents");
     const kedoButton = document.getElementById("send-kedo-test");
     const kedoDocumentTypeInput = document.getElementById("kedo-document-type-id");
     const kedoSenderInput = document.getElementById("kedo-sender-id");
@@ -186,6 +194,8 @@ def index() -> str:
       documentTypesButton,
       employeesButton,
       signatureTypesButton,
+      storageTestButton,
+      compareDocumentsButton,
       kedoButton
     ];
     const statusNode = document.getElementById("status");
@@ -486,6 +496,34 @@ def index() -> str:
       (data) => `Найдено типов подписи: ${data.signature_types.length}`
     ));
 
+    storageTestButton.addEventListener("click", async () => {
+      try {
+        const payload = await getKedoPayload();
+        await loadData(
+          "/api/kedo/storage-test",
+          renderJsonDetails,
+          (data) => {
+            const failed = (data.stages || []).filter((stage) => !stage.ok).length;
+            return failed
+              ? `Проверка временного хранилища: ошибок ${failed}`
+              : "Проверка временного хранилища успешна";
+          },
+          "POST",
+          payload
+        );
+      } catch (error) {
+        statusNode.textContent = "Ошибка";
+        statusNode.className = "status error";
+        contentNode.textContent = error.message;
+      }
+    });
+
+    compareDocumentsButton.addEventListener("click", () => loadData(
+      "/api/kedo/recent-documents/compare?limit=2",
+      renderJsonDetails,
+      (data) => `Получено документов для сравнения: ${(data.documents || []).length}`
+    ));
+
     kedoFileInput.addEventListener("change", () => {
       const file = kedoFileInput.files && kedoFileInput.files[0];
       if (file) statusNode.textContent = `Выбран файл: ${file.name}`;
@@ -579,6 +617,12 @@ def index() -> str:
         </div>
       `;
     }
+
+    function renderJsonDetails(data) {
+      contentNode.innerHTML = `
+        <pre class="json-block"><code>${escapeHtml(JSON.stringify(data, null, 2))}</code></pre>
+      `;
+    }
   </script>
 </body>
 </html>
@@ -622,6 +666,44 @@ def kedo_test_document(
         raise HTTPException(status_code=401, detail=str(error)) from error
     except KedoApiError as error:
         raise _to_http_exception(error) from error
+    except httpx.HTTPError as error:
+        raise _to_network_http_exception("Kontur KEDO API", error) from error
+
+
+@app.post("/api/kedo/storage-test", response_model=KedoStorageTestResponse)
+def kedo_storage_test(
+    payload: KedoTestDocumentRequest | None = None,
+) -> KedoStorageTestResponse:
+    raw_document_type_id = payload.document_type_id if payload else None
+    raw_file_name = payload.file_name if payload else None
+    file_bytes = _decode_file_content(payload.file_content_base64 if payload else None)
+    document_type_id = _non_empty_or(raw_document_type_id, DEFAULT_KEDO_DOCUMENT_TYPE_ID)
+    file_name = _safe_file_name(_non_empty_or(raw_file_name, DEFAULT_KEDO_TEST_FILENAME))
+    try:
+        return test_temporary_storage(
+            get_settings(),
+            document_type_id=document_type_id,
+            file_name=file_name,
+            file_bytes=file_bytes,
+        )
+    except KedoApiError as error:
+        raise _to_http_exception(error) from error
+    except KedoAuthError as error:
+        raise HTTPException(status_code=401, detail=str(error)) from error
+    except httpx.HTTPError as error:
+        raise _to_network_http_exception("Kontur KEDO API", error) from error
+
+
+@app.get("/api/kedo/recent-documents/compare", response_model=KedoRecentDocumentsCompareResponse)
+def kedo_compare_recent_documents(
+    limit: int = Query(default=2, ge=2, le=10),
+) -> KedoRecentDocumentsCompareResponse:
+    try:
+        return compare_recent_documents(get_settings(), limit=limit)
+    except KedoApiError as error:
+        raise _to_http_exception(error) from error
+    except KedoAuthError as error:
+        raise HTTPException(status_code=401, detail=str(error)) from error
     except httpx.HTTPError as error:
         raise _to_network_http_exception("Kontur KEDO API", error) from error
 

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import socket
 import ssl
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter, sleep
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -81,7 +82,50 @@ class KedoDownloadCheck(BaseModel):
     status_code: int
     size: int | None = None
     content_type: str | None = None
+    sha256: str | None = None
     message: str | None = None
+
+
+class KedoStorageStage(BaseModel):
+    stage: str
+    ok: bool
+    status_code: int
+    location: str | None = None
+    size: int | None = None
+    content_type: str | None = None
+    sha256: str | None = None
+    message: str | None = None
+    raw_response: dict[str, Any] | None = None
+
+
+class KedoStorageTestResponse(BaseModel):
+    org_id: str
+    document_type_id: str
+    file_name: str
+    stages: list[KedoStorageStage]
+
+
+class KedoRecentDocument(BaseModel):
+    process_id: str
+    document_id: str | None = None
+    name: str | None = None
+    created_at: str | None = None
+    type_id: str | None = None
+    content_name: str | None = None
+    content_location: str | None = None
+    content_type: str | None = None
+    is_draft: bool | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    content_download: KedoDownloadCheck | None = None
+    print_download: KedoDownloadCheck | None = None
+    raw_index: dict[str, Any] = Field(default_factory=dict)
+    raw_process: dict[str, Any] = Field(default_factory=dict)
+
+
+class KedoRecentDocumentsCompareResponse(BaseModel):
+    org_id: str
+    documents: list[KedoRecentDocument]
+    comparison: dict[str, Any]
 
 
 class KedoTestDocumentResponse(BaseModel):
@@ -440,6 +484,168 @@ def get_employees(
 
 def get_signature_types(settings: Settings) -> KedoSignatureTypesResponse:
     return KedoSignatureTypesResponse(signature_types=_signature_types(settings))
+
+
+def test_temporary_storage(
+    settings: Settings,
+    *,
+    access_token: str | None = None,
+    document_type_id: str | None = None,
+    file_name: str | None = None,
+    file_bytes: bytes | None = None,
+) -> KedoStorageTestResponse:
+    token = access_token or authenticate_with_password(settings)
+    api_key = _api_key(settings)
+
+    with httpx.Client(base_url=_base_url(settings), timeout=60.0) as client:
+        org_id = settings.kedo_org_id or _get_first_organization(
+            client, settings, token, api_key
+        ).id
+        document_type_id = document_type_id or settings.kedo_document_type_id
+        document_type_id = document_type_id or _get_document_type(
+            client,
+            settings,
+            token,
+            api_key,
+            org_id,
+        ).id
+        file_name = file_name or settings.kedo_test_filename or TEST_DOCUMENT_FILENAME
+        file_bytes = (
+            file_bytes if file_bytes is not None else _test_document_bytes(settings, file_name)
+        )
+
+        stages: list[KedoStorageStage] = []
+        content = _upload_content(client, settings, token, api_key, org_id, file_name, file_bytes)
+        content["name"] = file_name
+        upload_location = _string_value(content, "location")
+        stages.append(
+            KedoStorageStage(
+                stage="upload",
+                ok=True,
+                status_code=200,
+                location=upload_location,
+                raw_response=content,
+            )
+        )
+
+        stages.append(
+            _storage_download_stage(
+                "download_upload",
+                upload_location,
+                lambda: _download_content(
+                    client,
+                    settings,
+                    token,
+                    api_key,
+                    org_id,
+                    upload_location or "",
+                    file_name,
+                ),
+            )
+        )
+
+        processed_content = _process_content(
+            client,
+            settings,
+            token,
+            api_key,
+            org_id,
+            document_type_id,
+            content,
+        )
+        processed_content["name"] = processed_content.get("name") or file_name
+        processed_location = _string_value(processed_content, "location")
+        stages.append(
+            KedoStorageStage(
+                stage="process",
+                ok=True,
+                status_code=200,
+                location=processed_location,
+                raw_response=processed_content,
+            )
+        )
+        stages.append(
+            _storage_download_stage(
+                "download_processed",
+                processed_location,
+                lambda: _download_content(
+                    client,
+                    settings,
+                    token,
+                    api_key,
+                    org_id,
+                    processed_location or "",
+                    file_name,
+                ),
+            )
+        )
+
+    return KedoStorageTestResponse(
+        org_id=org_id,
+        document_type_id=document_type_id,
+        file_name=file_name,
+        stages=stages,
+    )
+
+
+def compare_recent_documents(
+    settings: Settings,
+    *,
+    access_token: str | None = None,
+    limit: int = 2,
+) -> KedoRecentDocumentsCompareResponse:
+    token = access_token or authenticate_with_password(settings)
+    api_key = _api_key(settings)
+    safe_limit = min(max(limit, 2), 10)
+
+    with httpx.Client(base_url=_base_url(settings), timeout=60.0) as client:
+        org_id = settings.kedo_org_id or _get_first_organization(
+            client, settings, token, api_key
+        ).id
+        response = _request(
+            client,
+            "Query recent KEDO processes",
+            "POST",
+            _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/processes/query"),
+            params={"limit": safe_limit, "offset": 0},
+            headers=_json_headers(token, api_key),
+            json={},
+        )
+        indexed_processes = _paged_result(response.json())
+        indexed_processes.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
+        indexed_processes = indexed_processes[:safe_limit]
+        details = _get_created_process_details(
+            client,
+            settings,
+            token,
+            api_key,
+            org_id,
+            _process_ids(indexed_processes),
+        )
+        details_by_id = {
+            process["id"]: process
+            for process in details
+            if isinstance(process.get("id"), str)
+        }
+        documents = [
+            _recent_document_summary(
+                client,
+                settings,
+                token,
+                api_key,
+                org_id,
+                indexed,
+                details_by_id.get(indexed["id"], {}),
+            )
+            for indexed in indexed_processes
+            if isinstance(indexed.get("id"), str)
+        ]
+
+    return KedoRecentDocumentsCompareResponse(
+        org_id=org_id,
+        documents=documents,
+        comparison=_compare_recent_document_summaries(documents[:2]),
+    )
 
 
 def download_content(
@@ -870,6 +1076,138 @@ def _get_created_process_details(
     return details
 
 
+def _storage_download_stage(
+    stage: str,
+    location: str | None,
+    download: Callable[[], KedoDownloadedFile],
+) -> KedoStorageStage:
+    if not location:
+        return KedoStorageStage(
+            stage=stage,
+            ok=False,
+            status_code=0,
+            message="Location is missing.",
+        )
+    try:
+        file = download()
+    except KedoApiError as error:
+        return KedoStorageStage(
+            stage=stage,
+            ok=False,
+            status_code=error.status_code,
+            location=location,
+            message=error.response_text,
+        )
+    return KedoStorageStage(
+        stage=stage,
+        ok=bool(file.content),
+        status_code=200,
+        location=location,
+        size=len(file.content),
+        content_type=file.content_type,
+        sha256=_sha256(file.content),
+        message=None if file.content else "Empty file.",
+    )
+
+
+def _recent_document_summary(
+    client: httpx.Client,
+    settings: Settings,
+    access_token: str,
+    api_key: str,
+    org_id: str,
+    indexed: dict[str, Any],
+    process: dict[str, Any],
+) -> KedoRecentDocument:
+    process_id = _required_string(indexed, "id")
+    document = next(iter(_iter_process_documents([process])), {})
+    content = cast(
+        dict[str, Any],
+        document.get("content") if isinstance(document.get("content"), dict) else {},
+    )
+    metadata = cast(
+        dict[str, Any],
+        document.get("metadata") if isinstance(document.get("metadata"), dict) else {},
+    )
+    document_id = _string_value(document, "id") or _string_value(indexed, "documentId")
+    content_location = _string_value(content, "location")
+
+    content_download = None
+    if content_location:
+        content_download = _download_check(
+            "content",
+            lambda: _download_content(
+                client,
+                settings,
+                access_token,
+                api_key,
+                org_id,
+                content_location,
+                _string_value(content, "name") or "document.bin",
+            ),
+        )
+
+    print_download = None
+    if document_id:
+        print_download = _download_check(
+            "print",
+            lambda: KedoDownloadedFile(
+                content=_download_document_print(
+                    client,
+                    settings,
+                    access_token,
+                    api_key,
+                    org_id,
+                    process_id,
+                    document_id,
+                ),
+                content_type="application/pdf",
+                file_name=f"{document_id}.pdf",
+            ),
+        )
+
+    return KedoRecentDocument(
+        process_id=process_id,
+        document_id=document_id,
+        name=_string_value(indexed, "name") or _string_value(process, "name"),
+        created_at=_string_value(indexed, "createdAt") or _string_value(process, "createdAt"),
+        type_id=_string_value(indexed, "typeId"),
+        content_name=_string_value(content, "name"),
+        content_location=content_location,
+        content_type=_string_value(document, "contentType"),
+        is_draft=document.get("isDraft") if isinstance(document.get("isDraft"), bool) else None,
+        metadata=metadata,
+        content_download=content_download,
+        print_download=print_download,
+        raw_index=indexed,
+        raw_process=process,
+    )
+
+
+def _compare_recent_document_summaries(
+    documents: list[KedoRecentDocument],
+) -> dict[str, Any]:
+    if len(documents) < 2:
+        return {"message": "Need at least two documents to compare."}
+
+    first, second = documents[0], documents[1]
+    return {
+        "same_type_id": first.type_id == second.type_id,
+        "same_content_name": first.content_name == second.content_name,
+        "same_content_type": first.content_type == second.content_type,
+        "same_is_draft": first.is_draft == second.is_draft,
+        "first_downloads_ok": _summary_downloads_ok(first),
+        "second_downloads_ok": _summary_downloads_ok(second),
+    }
+
+
+def _summary_downloads_ok(document: KedoRecentDocument) -> dict[str, bool | None]:
+    return {
+        "content": document.content_download.ok if document.content_download else None,
+        "print": document.print_download.ok if document.print_download else None,
+    }
+
+
 def _check_created_document_downloads(
     settings: Settings,
     *,
@@ -922,6 +1260,7 @@ def _download_check(method: str, download: Callable[[], KedoDownloadedFile]) -> 
         status_code=200,
         size=len(file.content),
         content_type=file.content_type,
+        sha256=_sha256(file.content),
         message=None if file.content else "Empty file.",
     )
 
@@ -1159,6 +1498,10 @@ def _required_string(payload: dict[str, Any], key: str) -> str:
 def _string_value(payload: dict[str, Any], key: str) -> str | None:
     value = payload.get(key)
     return value if isinstance(value, str) and value else None
+
+
+def _sha256(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
 
 
 def _raise_for_status(response: httpx.Response, stage: str) -> None:
