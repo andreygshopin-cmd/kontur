@@ -6,6 +6,7 @@ import hashlib
 import socket
 import ssl
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import perf_counter, sleep
@@ -479,6 +480,15 @@ def get_document_types(
         org_id = settings.kedo_org_id or _get_first_organization(
             client, settings, token, api_key
         ).id
+        if not is_filtered:
+            document_types = _get_document_types_first_pages(
+                settings,
+                token,
+                api_key,
+                org_id,
+            )
+            return KedoDocumentTypesResponse(org_id=org_id, document_types=document_types)
+
         try:
             document_types = _get_document_types(
                 client,
@@ -1017,6 +1027,59 @@ def _get_document_types(
         if max_pages is not None and pages_read >= max_pages:
             return document_types
         offset += page_size
+
+
+def _get_document_types_first_pages(
+    settings: Settings,
+    access_token: str,
+    api_key: str,
+    org_id: str,
+) -> list[KedoDocumentType]:
+    offsets = [
+        page_index * DOCUMENT_TYPES_PAGE_SIZE
+        for page_index in range(DOCUMENT_TYPES_MAX_PAGES)
+    ]
+    with ThreadPoolExecutor(max_workers=DOCUMENT_TYPES_MAX_PAGES) as executor:
+        pages = list(
+            executor.map(
+                lambda offset: _get_document_types_page(
+                    settings,
+                    access_token,
+                    api_key,
+                    org_id,
+                    offset=offset,
+                ),
+                offsets,
+            )
+        )
+
+    return [document_type for page in pages for document_type in page]
+
+
+def _get_document_types_page(
+    settings: Settings,
+    access_token: str,
+    api_key: str,
+    org_id: str,
+    *,
+    offset: int,
+) -> list[KedoDocumentType]:
+    with httpx.Client(base_url=_base_url(settings), timeout=DOCUMENT_TYPES_TIMEOUT) as client:
+        response = _request(
+            client,
+            "Get KEDO document types",
+            "GET",
+            _api_path(settings, f"/kedo/api/v1/orgs/{org_id}/document-types"),
+            headers=_json_headers(access_token, api_key),
+            params={
+                "limit": DOCUMENT_TYPES_PAGE_SIZE,
+                "offset": offset,
+                "includeDeleted": False,
+                "includeDisabled": False,
+                "includeSystems": True,
+            },
+        )
+    return [_normalize_document_type(item) for item in _paged_result(response.json())]
 
 
 def _upload_content(

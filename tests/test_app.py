@@ -722,7 +722,7 @@ def test_get_document_types_returns_first_500_without_filter(monkeypatch) -> Non
         access_token="token",
     )
 
-    assert [call["offset"] for call in calls] == [0, 100, 200, 300, 400]
+    assert sorted(call["offset"] for call in calls) == [0, 100, 200, 300, 400]
     assert all(call["limit"] == 100 for call in calls)
     assert all(call["includeSystems"] is True for call in calls)
     assert len(response.document_types) == 500
