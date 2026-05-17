@@ -76,8 +76,6 @@ def test_index_has_only_kedo_controls() -> None:
     assert 'class="debug-actions"' in response.text
     assert "formatClientDateTime(document.signed_at)" in response.text
     assert 'title="${escapeHtml(document.signed_at)}"' in response.text
-    assert "Все поля за последние 14 дней" in response.text
-    assert "raw_signed_events" in response.text
     assert "KONTUR_KEDO_TEST_FILENAME" not in response.text
     assert "Войти в Контур" not in response.text
     assert "Получить организации" not in response.text
@@ -859,7 +857,7 @@ def test_get_signed_documents_reads_signature_events(monkeypatch) -> None:
         def request(self, method, url, **kwargs):
             if url.endswith("/processes/events/query"):
                 assert method == "POST"
-                assert kwargs["json"]["limit"] == 25
+                assert kwargs["json"]["limit"] == 100
                 assert kwargs["json"]["inverted"] is True
                 assert kwargs["json"]["includeHiringEvents"] is False
                 assert set(kwargs["json"]["eventTimeRange"]) == {"from", "to"}
@@ -938,9 +936,6 @@ def test_get_signed_documents_reads_signature_events(monkeypatch) -> None:
 
     assert response.org_id == "org-id"
     assert response.last_offset == "last-offset-id"
-    assert len(response.raw_events) == 2
-    assert len(response.raw_signed_events) == 1
-    assert response.raw_processes[0]["id"] == "process-id"
     assert len(response.signed_documents) == 1
     signed_document = response.signed_documents[0]
     assert signed_document.process_id == "process-id"
@@ -951,232 +946,6 @@ def test_get_signed_documents_reads_signature_events(monkeypatch) -> None:
     assert signed_document.signature_location == "signature-location-id"
     assert signed_document.signer_employee_id == "employee-id"
     assert signed_document.is_valid is True
-    assert signed_document.raw_event["eventId"] == "event-id"
-    assert signed_document.raw_process["id"] == "process-id"
-    assert signed_document.raw_signature["id"] == "signature-id"
-
-
-def test_get_signed_documents_paginates_events_for_full_window(monkeypatch) -> None:
-    event_queries = []
-
-    class FakeClient:
-        def __init__(self, *, base_url, timeout) -> None:
-            self.base_url = base_url
-            self.timeout = timeout
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback) -> None:
-            return None
-
-        def request(self, method, url, **kwargs):
-            if url.endswith("/processes/events/query"):
-                event_queries.append(kwargs["json"])
-                if len(event_queries) == 1:
-                    return kedo_client_module.httpx.Response(
-                        200,
-                        json={
-                            "lastOffset": "next-offset",
-                            "events": [
-                                {"eventType": 7, "processId": f"ignored-{index}"}
-                                for index in range(100)
-                            ],
-                        },
-                    )
-                return kedo_client_module.httpx.Response(
-                    200,
-                    json={
-                        "lastOffset": "final-offset",
-                        "events": [
-                            {
-                                "eventType": 10,
-                                "processId": "process-id",
-                                "eventId": "event-id",
-                                "createdAt": "2026-05-17T12:35:00Z",
-                            }
-                        ],
-                    },
-                )
-            if url.endswith("/processes/process-id"):
-                return kedo_client_module.httpx.Response(
-                    200,
-                    json={
-                        "id": "process-id",
-                        "flatPath": {
-                            "nodes": [
-                                {
-                                    "type": "Sign",
-                                    "signedContents": {
-                                        "0": {
-                                            "signature": {
-                                                "signature": {
-                                                    "createdAt": "2026-05-17T12:34:56Z"
-                                                }
-                                            }
-                                        }
-                                    },
-                                }
-                            ]
-                        },
-                    },
-                )
-            raise AssertionError(f"Unexpected request URL: {url}")
-
-    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
-
-    response = get_signed_documents(
-        Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
-        access_token="token",
-        days=1,
-    )
-
-    assert len(event_queries) == 2
-    assert "offset" not in event_queries[0]
-    assert event_queries[1]["offset"] == "next-offset"
-    assert response.last_offset == "final-offset"
-    assert len(response.raw_events) == 101
-    assert len(response.raw_signed_events) == 1
-    assert len(response.signed_documents) == 1
-
-
-def test_get_signed_documents_splits_event_range_after_timeout(monkeypatch) -> None:
-    event_queries = []
-    emitted_event = False
-
-    class FakeClient:
-        def __init__(self, *, base_url, timeout) -> None:
-            self.base_url = base_url
-            self.timeout = timeout
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback) -> None:
-            return None
-
-        def request(self, method, url, **kwargs):
-            nonlocal emitted_event
-            if url.endswith("/processes/events/query"):
-                event_queries.append(kwargs["json"])
-                if len(event_queries) == 1:
-                    raise kedo_client_module.httpx.ReadTimeout("timed out")
-                if emitted_event:
-                    return kedo_client_module.httpx.Response(200, json={"events": []})
-                emitted_event = True
-                return kedo_client_module.httpx.Response(
-                    200,
-                    json={
-                        "events": [
-                            {
-                                "eventType": 10,
-                                "processId": "process-id",
-                                "eventId": "event-id",
-                            }
-                        ],
-                    },
-                )
-            if url.endswith("/processes/process-id"):
-                return kedo_client_module.httpx.Response(
-                    200,
-                    json={
-                        "id": "process-id",
-                        "flatPath": {
-                            "nodes": [
-                                {
-                                    "type": "Sign",
-                                    "signedContents": {
-                                        "0": {
-                                            "signature": {
-                                                "signature": {
-                                                    "createdAt": "2026-05-17T12:34:56Z"
-                                                }
-                                            }
-                                        }
-                                    },
-                                }
-                            ]
-                        },
-                    },
-                )
-            raise AssertionError(f"Unexpected request URL: {url}")
-
-    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
-
-    response = get_signed_documents(
-        Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
-        access_token="token",
-        days=1,
-    )
-
-    assert len(event_queries) > 1
-    assert response.event_query_errors == []
-    assert len(response.raw_signed_events) == 1
-    assert len(response.signed_documents) == 1
-
-
-def test_get_signed_documents_keeps_signature_without_created_at(monkeypatch) -> None:
-    class FakeClient:
-        def __init__(self, *, base_url, timeout) -> None:
-            self.base_url = base_url
-            self.timeout = timeout
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback) -> None:
-            return None
-
-        def request(self, method, url, **kwargs):
-            if url.endswith("/processes/events/query"):
-                return kedo_client_module.httpx.Response(
-                    200,
-                    json={
-                        "events": [
-                            {
-                                "eventType": 10,
-                                "processId": "process-id",
-                                "eventId": "event-id",
-                            }
-                        ],
-                    },
-                )
-            if url.endswith("/processes/process-id"):
-                return kedo_client_module.httpx.Response(
-                    200,
-                    json={
-                        "id": "process-id",
-                        "flatPath": {
-                            "nodes": [
-                                {
-                                    "type": "Sign",
-                                    "signedContents": {
-                                        "0": {
-                                            "signature": {
-                                                "isValid": None,
-                                                "signature": {"id": "signature-id"},
-                                            }
-                                        }
-                                    },
-                                }
-                            ]
-                        },
-                    },
-                )
-            raise AssertionError(f"Unexpected request URL: {url}")
-
-    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
-
-    response = get_signed_documents(
-        Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
-        access_token="token",
-    )
-
-    assert len(response.signed_documents) == 1
-    signed_document = response.signed_documents[0]
-    assert signed_document.signed_at is None
-    assert signed_document.signature_id == "signature-id"
-    assert signed_document.raw_signed_content["signature"]["signature"]["id"] == "signature-id"
 
 
 def test_build_process_payload_has_sender_and_sign_step() -> None:

@@ -472,17 +472,6 @@ def index() -> str:
     }
 
     function renderKedoSignedDocuments(data) {
-      const allFields = {
-        query: data.query || {},
-        last_offset: data.last_offset || null,
-        raw_events: data.raw_events || [],
-        raw_signed_events: data.raw_signed_events || [],
-        raw_processes: data.raw_processes || [],
-        event_query_errors: data.event_query_errors || [],
-        process_errors: data.process_errors || [],
-        signed_documents: data.signed_documents || []
-      };
-      const allFieldsJson = JSON.stringify(allFields, null, 2);
       const rows = (data.signed_documents || []).map((document) => {
         const signerId = document.signer_employee_id || document.signer_user_id || "";
         const isValid = document.is_valid === null || document.is_valid === undefined
@@ -503,7 +492,7 @@ def index() -> str:
       `;
       }).join("");
 
-      const tableHtml = rows ? `
+      contentNode.innerHTML = rows ? `
         <table>
           <thead>
             <tr>
@@ -520,16 +509,7 @@ def index() -> str:
           <tbody>${rows}</tbody>
         </table>
         <p class="muted">lastOffset: <code>${escapeHtml(data.last_offset || "")}</code></p>
-      ` : `
-        <span class="muted">
-          Подписанные документы в событиях КЭДО за последние 14 дней не найдены.
-        </span>
-      `;
-      contentNode.innerHTML = `
-        ${tableHtml}
-        <h3>Все поля за последние 14 дней</h3>
-        <pre class="json-block">${escapeHtml(allFieldsJson)}</pre>
-      `;
+      ` : `<span class="muted">Подписанные документы в последних событиях КЭДО не найдены.</span>`;
     }
 
     function readFileAsBase64(file) {
@@ -649,12 +629,9 @@ def index() -> str:
     ));
 
     checkSignaturesButton.addEventListener("click", () => loadData(
-      "/api/kedo/signed-documents?limit=100&days=14",
+      "/api/kedo/signed-documents?limit=50&days=14",
       renderKedoSignedDocuments,
-      (data) => `Найдено подписанных документов: ${(data.signed_documents || []).length}; ` +
-        `событий подписи: ${(data.raw_signed_events || []).length}; ` +
-        `всего событий за 14 дней: ${(data.raw_events || []).length}; ` +
-        `ошибок запросов: ${(data.event_query_errors || []).length}`
+      (data) => `Найдено подписанных документов: ${(data.signed_documents || []).length}`
     ));
 
     kedoFileInput.addEventListener("change", () => {
