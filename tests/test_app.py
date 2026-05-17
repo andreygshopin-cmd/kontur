@@ -68,7 +68,11 @@ def test_index_has_only_kedo_controls() -> None:
     assert 'id="kedo-due-days"' in response.text
     assert "Тип подписи" in response.text
     assert 'id="kedo-signature-type"' in response.text
+    assert 'class="file-row"' in response.text
+    assert 'class="file-buttons"' in response.text
     assert 'id="kedo-file"' in response.text
+    assert 'class="debug-panel"' in response.text
+    assert 'class="debug-actions"' in response.text
     assert "KONTUR_KEDO_TEST_FILENAME" not in response.text
     assert "Войти в Контур" not in response.text
     assert "Получить организации" not in response.text
@@ -575,7 +579,8 @@ def test_kedo_connectivity(monkeypatch) -> None:
 
 
 def test_kedo_document_types(monkeypatch) -> None:
-    def fake_get_kedo_document_types(_settings):
+    def fake_get_kedo_document_types(_settings, *, filter_text=None):
+        assert filter_text is None
         return KedoDocumentTypesResponse(
             org_id="11111111-1111-1111-1111-111111111111",
             document_types=[
@@ -597,18 +602,15 @@ def test_kedo_document_types(monkeypatch) -> None:
 
 
 def test_kedo_document_types_filters_by_name(monkeypatch) -> None:
-    def fake_get_kedo_document_types(_settings):
+    def fake_get_kedo_document_types(_settings, *, filter_text=None):
+        assert filter_text == "Несчастн"
         return KedoDocumentTypesResponse(
             org_id="11111111-1111-1111-1111-111111111111",
             document_types=[
                 KedoDocumentType(
                     id="22222222-2222-2222-2222-222222222222",
                     name="Несчастный случай",
-                ),
-                KedoDocumentType(
-                    id="33333333-3333-3333-3333-333333333333",
-                    name="Кадровый документ",
-                ),
+                )
             ],
         )
 
@@ -659,9 +661,10 @@ def test_kedo_signature_types(monkeypatch) -> None:
 
 
 def test_kedo_signed_documents(monkeypatch) -> None:
-    def fake_get_signed_documents(_settings, *, limit, offset=None):
+    def fake_get_signed_documents(_settings, *, limit, offset=None, days=None):
         assert limit == 25
         assert offset == "offset-id"
+        assert days == 14
         return KedoSignedDocumentsResponse(
             org_id="11111111-1111-1111-1111-111111111111",
             last_offset="last-offset-id",
@@ -685,7 +688,7 @@ def test_kedo_signed_documents(monkeypatch) -> None:
 
     response = client.get(
         "/api/kedo/signed-documents",
-        params={"limit": 25, "offset": "offset-id"},
+        params={"limit": 25, "offset": "offset-id", "days": 14},
     )
 
     assert response.status_code == 200
@@ -707,7 +710,9 @@ def test_get_signed_documents_reads_signature_events(monkeypatch) -> None:
         def request(self, method, url, **kwargs):
             if url.endswith("/processes/events/query"):
                 assert method == "POST"
-                assert kwargs["json"] == {"limit": 100, "inverted": True}
+                assert kwargs["json"]["limit"] == 100
+                assert kwargs["json"]["inverted"] is True
+                assert set(kwargs["json"]["eventTimeRange"]) == {"from", "to"}
                 return kedo_client_module.httpx.Response(
                     200,
                     json={

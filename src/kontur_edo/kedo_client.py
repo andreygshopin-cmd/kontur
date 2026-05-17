@@ -7,7 +7,7 @@ import socket
 import ssl
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from time import perf_counter, sleep
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -464,11 +464,12 @@ def get_document_types(
     settings: Settings,
     *,
     access_token: str | None = None,
+    filter_text: str | None = None,
 ) -> KedoDocumentTypesResponse:
     token = access_token or authenticate_with_password(settings)
     api_key = _api_key(settings)
 
-    with httpx.Client(base_url=_base_url(settings), timeout=30.0) as client:
+    with httpx.Client(base_url=_base_url(settings), timeout=120.0) as client:
         org_id = settings.kedo_org_id or _get_first_organization(
             client, settings, token, api_key
         ).id
@@ -480,7 +481,8 @@ def get_document_types(
             org_id,
             include_disabled=True,
             include_systems=True,
-            page_size=100,
+            page_size=20,
+            filter_text=filter_text,
         )
 
     return KedoDocumentTypesResponse(org_id=org_id, document_types=document_types)
@@ -685,19 +687,28 @@ def get_signed_documents(
     access_token: str | None = None,
     limit: int = 100,
     offset: str | None = None,
+    days: int | None = 14,
 ) -> KedoSignedDocumentsResponse:
     token = access_token or authenticate_with_password(settings)
     api_key = _api_key(settings)
     safe_limit = min(max(limit, 1), 100)
 
-    with httpx.Client(base_url=_base_url(settings), timeout=60.0) as client:
+    with httpx.Client(base_url=_base_url(settings), timeout=120.0) as client:
         org_id = settings.kedo_org_id or _get_first_organization(
             client, settings, token, api_key
         ).id
         query: dict[str, Any] = {
             "limit": safe_limit,
             "inverted": True,
+            "includeHiringEvents": False,
         }
+        if days:
+            safe_days = min(max(days, 1), 365)
+            to_time = datetime.now(UTC)
+            query["eventTimeRange"] = {
+                "from": _kedo_datetime(to_time - timedelta(days=safe_days)),
+                "to": _kedo_datetime(to_time),
+            }
         if offset:
             query["offset"] = offset
 
@@ -901,6 +912,7 @@ def _get_document_type(
         include_disabled=False,
         include_systems=False,
         page_size=50,
+        filter_text=None,
     )
     preferred_name = settings.kedo_document_type_name
     if preferred_name:
@@ -933,8 +945,10 @@ def _get_document_types(
     include_disabled: bool,
     include_systems: bool,
     page_size: int,
+    filter_text: str | None,
 ) -> list[KedoDocumentType]:
     document_types: list[KedoDocumentType] = []
+    normalized_filter = filter_text.strip().casefold() if filter_text else ""
     offset = 0
     while True:
         response = _request(
@@ -953,7 +967,12 @@ def _get_document_types(
         )
 
         page = [_normalize_document_type(item) for item in _paged_result(response.json())]
-        document_types.extend(page)
+        document_types.extend(
+            document_type
+            for document_type in page
+            if not normalized_filter
+            or _document_type_matches_filter(document_type, normalized_filter)
+        )
         if len(page) < page_size:
             return document_types
         offset += page_size
@@ -1770,6 +1789,11 @@ def _normalize_document_type(item: dict[str, Any]) -> KedoDocumentType:
     )
 
 
+def _document_type_matches_filter(document_type: KedoDocumentType, filter_text: str) -> bool:
+    haystack = f"{document_type.id} {document_type.name or ''} {document_type.metadata}".casefold()
+    return filter_text in haystack
+
+
 def _paged_result(payload: Any) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
@@ -1838,6 +1862,10 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str) and item]
+
+
+def _kedo_datetime(value: datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _sha256(content: bytes) -> str:

@@ -16,7 +16,6 @@ from kontur_edo.kedo_client import (
     KedoApiError,
     KedoAuthError,
     KedoConnectivityResponse,
-    KedoDocumentType,
     KedoDocumentTypesResponse,
     KedoEmployeesResponse,
     KedoRecentDocumentsCompareResponse,
@@ -112,7 +111,19 @@ def index() -> str:
     button.secondary { background: #2563eb; }
     button.ghost { background: #475569; }
     button:disabled { opacity: .65; cursor: progress; }
-    .kedo-form { margin-top: 18px; display: grid; gap: 8px; max-width: 520px; }
+    .kedo-form { margin-top: 18px; display: grid; gap: 8px; max-width: 900px; }
+    .file-row {
+      display: grid; grid-template-columns: minmax(260px, 360px) minmax(260px, 1fr);
+      gap: 10px; align-items: end;
+    }
+    .file-field { display: grid; gap: 8px; }
+    .file-buttons { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+    .debug-panel {
+      margin-top: 18px; padding: 14px 16px; border: 1px solid #d9dee7; border-radius: 8px;
+      background: #ffffff;
+    }
+    .debug-header { margin-bottom: 10px; color: #52606d; font-size: 14px; font-weight: 700; }
+    .debug-actions { display: flex; flex-wrap: wrap; gap: 10px; }
     label { color: #52606d; font-size: 14px; font-weight: 700; }
     input {
       width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1;
@@ -141,6 +152,8 @@ def index() -> str:
     @media (max-width: 720px) {
       header { align-items: flex-start; flex-direction: column; }
       .actions { justify-content: flex-start; }
+      .file-row { grid-template-columns: 1fr; }
+      .file-buttons { align-items: stretch; }
       .details { grid-template-columns: 1fr; }
     }
   </style>
@@ -153,7 +166,6 @@ def index() -> str:
         __DEPLOY_INFO_HTML__
       </div>
       <div class="actions">
-        <button id="check-kedo" class="secondary">Проверить КЭДО API</button>
         <label class="action-field" for="kedo-document-type-filter">
           Фильтр типов документов
           <input id="kedo-document-type-filter" type="text" value="Несчастн">
@@ -163,12 +175,6 @@ def index() -> str:
         </button>
         <button id="load-kedo-employees" class="secondary">Получить сотрудников</button>
         <button id="load-kedo-signature-types" class="secondary">Получить типы подписи</button>
-        <button id="test-kedo-storage" class="secondary">Проверить временное хранилище</button>
-        <button id="compare-kedo-documents" class="secondary">Сравнить последние документы</button>
-        <button id="check-kedo-signatures" class="secondary">
-          Проверить подписание документов
-        </button>
-        <button id="send-kedo-test" class="ghost">Отправить тестовый файл в КЭДО</button>
       </div>
     </header>
     <div class="kedo-form">
@@ -186,9 +192,27 @@ def index() -> str:
       <input id="kedo-signature-type" type="text" value="Pep">
       <label for="kedo-due-days">Срок выполнения, календарные дни</label>
       <input id="kedo-due-days" type="number" min="1" step="1" value="1">
-      <label for="kedo-file">Файл для отправки</label>
-      <input id="kedo-file" type="file">
+      <div class="file-row">
+        <div class="file-field">
+          <label for="kedo-file">Файл для отправки</label>
+          <input id="kedo-file" type="file">
+        </div>
+        <div class="file-buttons">
+          <button id="send-kedo-test" class="ghost">Отправить тестовый файл в КЭДО</button>
+          <button id="check-kedo-signatures" class="secondary">
+            Проверить подписание документов
+          </button>
+        </div>
+      </div>
     </div>
+    <section class="debug-panel" aria-label="Отладка">
+      <div class="debug-header">Отладка</div>
+      <div class="debug-actions">
+        <button id="check-kedo" class="secondary">Проверить КЭДО API</button>
+        <button id="test-kedo-storage" class="secondary">Проверить временное хранилище</button>
+        <button id="compare-kedo-documents" class="secondary">Сравнить последние документы</button>
+      </div>
+    </section>
     <section class="panel">
       <div id="status" class="status muted">Готово к проверке КЭДО.</div>
       <div id="content" class="content muted">
@@ -589,7 +613,7 @@ def index() -> str:
     ));
 
     checkSignaturesButton.addEventListener("click", () => loadData(
-      "/api/kedo/signed-documents?limit=100",
+      "/api/kedo/signed-documents?limit=50&days=14",
       renderKedoSignedDocuments,
       (data) => `Найдено подписанных документов: ${(data.signed_documents || []).length}`
     ));
@@ -787,9 +811,10 @@ def kedo_compare_recent_documents(
 def kedo_signed_documents(
     limit: int = Query(default=100, ge=1, le=100),
     offset: str | None = Query(default=None),
+    days: int = Query(default=14, ge=1, le=365),
 ) -> KedoSignedDocumentsResponse:
     try:
-        return get_signed_documents(get_settings(), limit=limit, offset=offset)
+        return get_signed_documents(get_settings(), limit=limit, offset=offset, days=days)
     except KedoApiError as error:
         raise _to_http_exception(error) from error
     except KedoAuthError as error:
@@ -848,26 +873,13 @@ def kedo_document_types(
     filter_text: str | None = Query(default=None, alias="filter"),
 ) -> KedoDocumentTypesResponse:
     try:
-        response = get_kedo_document_types(get_settings())
+        return get_kedo_document_types(get_settings(), filter_text=filter_text)
     except KedoAuthError as error:
         raise HTTPException(status_code=401, detail=str(error)) from error
     except KedoApiError as error:
         raise _to_http_exception(error) from error
     except httpx.HTTPError as error:
         raise _to_network_http_exception("Kontur KEDO API", error) from error
-
-    normalized_filter = filter_text.strip().casefold() if filter_text else ""
-    if not normalized_filter:
-        return response
-
-    return KedoDocumentTypesResponse(
-        org_id=response.org_id,
-        document_types=[
-            document_type
-            for document_type in response.document_types
-            if _document_type_matches_filter(document_type, normalized_filter)
-        ],
-    )
 
 
 @app.get("/api/kedo/employees", response_model=KedoEmployeesResponse)
@@ -948,11 +960,6 @@ def _non_empty_or(value: str | None, default: str) -> str:
 def _non_empty(value: str | None) -> str | None:
     stripped = value.strip() if value else ""
     return stripped or None
-
-
-def _document_type_matches_filter(document_type: KedoDocumentType, filter_text: str) -> bool:
-    haystack = f"{document_type.id} {document_type.name or ''} {document_type.metadata}".casefold()
-    return filter_text in haystack
 
 
 def _safe_file_name(value: str) -> str:
