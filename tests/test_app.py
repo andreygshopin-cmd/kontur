@@ -360,7 +360,7 @@ def test_send_test_document_uses_processed_content(monkeypatch) -> None:
                     json={
                         "id": "process-id",
                         "documents": {
-                            "1": {
+                            "0": {
                                 "id": "document-id",
                                 "contentType": "Document",
                                 "isDraft": False,
@@ -394,7 +394,7 @@ def test_send_test_document_uses_processed_content(monkeypatch) -> None:
         file_bytes=b"%PDF-test",
     )
 
-    process_document = process_payloads[0]["processes"][0]["documents"]["1"]
+    process_document = process_payloads[0]["processes"][0]["documents"]["0"]
     assert process_document["content"]["location"] == "processed-location"
     assert process_document["content"]["name"] == "processed.pdf"
     assert response.content_location == "upload-location"
@@ -491,7 +491,7 @@ def test_send_test_document_rejects_draft_process_document(monkeypatch) -> None:
                     json={
                         "id": "process-id",
                         "documents": {
-                            "1": {
+                            "0": {
                                 "id": "document-id",
                                 "isDraft": True,
                                 "children": [],
@@ -651,11 +651,12 @@ def test_build_process_payload_has_sender_and_sign_step() -> None:
     UUID(sign_route["id"])
     assert sign_route["target"]["id"] == "22222222-2222-2222-2222-222222222222"
     assert sign_route["allowedTypes"] == ["Nep"]
-    assert sign_route["documentKeys"] == [1]
-    assert sign_route["allowedActions"] == ["Admission"]
+    assert sign_route["documentKeys"] == [0]
+    assert sign_route["allowedActions"] == ["Admission", "Rejection"]
     assert sign_route["next"] is None
     assert sign_route["comment"] is None
     assert sign_route["deadlineAt"] is None
+    assert sign_route["deadline"] == {"deadlineAt": None, "relativeDeadlineAt": 3}
 
 
 def test_build_process_payload_uses_single_sign_step_for_same_sender_and_signer() -> None:
@@ -677,6 +678,7 @@ def test_build_process_payload_uses_single_sign_step_for_same_sender_and_signer(
     assert sign_route["type"] == "Sign"
     assert sign_route["target"]["id"] == "11111111-1111-1111-1111-111111111111"
     assert sign_route["allowedTypes"] == ["Pep"]
-    assert sign_route["documentKeys"] == [1]
-    assert sign_route["allowedActions"] == ["Admission"]
+    assert sign_route["documentKeys"] == [0]
+    assert sign_route["allowedActions"] == ["Admission", "Rejection"]
     assert sign_route["next"] is None
+    assert sign_route["deadline"] == {"deadlineAt": None, "relativeDeadlineAt": 3}
