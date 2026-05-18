@@ -337,6 +337,16 @@ def index() -> str:
       }).format(date);
     }
 
+    function updateDeploymentInfoTime() {
+      const deployTime = document.querySelector("#deploy-info time");
+      if (!deployTime) return;
+      const value = deployTime.dateTime || deployTime.getAttribute("datetime");
+      const formatted = formatClientDateTime(value);
+      if (formatted) deployTime.textContent = formatted;
+    }
+
+    updateDeploymentInfoTime();
+
     function bindDocumentTypeButtons() {
       contentNode.querySelectorAll("[data-document-type-id]").forEach((button) => {
         button.addEventListener("click", () => {

@@ -80,6 +80,8 @@ def test_index_has_only_kedo_controls() -> None:
     assert 'class="debug-actions"' in response.text
     assert "formatClientDateTime(document.signed_at)" in response.text
     assert 'title="${escapeHtml(document.signed_at)}"' in response.text
+    assert "updateDeploymentInfoTime()" in response.text
+    assert 'document.querySelector("#deploy-info time")' in response.text
     assert "KONTUR_KEDO_TEST_FILENAME" not in response.text
     assert "Войти в Контур" not in response.text
     assert "Получить организации" not in response.text
@@ -108,7 +110,9 @@ def test_index_shows_deployment_info(monkeypatch) -> None:
     response = client.get("/")
 
     assert response.status_code == 200
+    assert '<time datetime="2026-05-17T12:30:40Z">' in response.text
     assert "2026-05-17 12:30:40 UTC" in response.text
+    assert "updateDeploymentInfoTime()" in response.text
     assert "commit abcdef1" in response.text
 
 
