@@ -1082,6 +1082,78 @@ def test_get_signed_documents_reads_signed_contents_from_recent_processes(monkey
     assert signed_document.is_valid is True
 
 
+def test_get_signed_documents_skips_timed_out_process_details(monkeypatch) -> None:
+    signed_at = datetime.now(UTC).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    class FakeClient:
+        def __init__(self, *, base_url, timeout) -> None:
+            self.base_url = base_url
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def request(self, method, url, **kwargs):
+            if url.endswith("/processes/query"):
+                return kedo_client_module.httpx.Response(
+                    200,
+                    json={
+                        "result": [
+                            {"id": "slow-process-id", "createdAt": signed_at},
+                            {"id": "process-id", "createdAt": signed_at},
+                        ],
+                    },
+                )
+            if url.endswith("/processes/slow-process-id"):
+                raise kedo_client_module.httpx.ReadTimeout("timed out")
+            if url.endswith("/processes/process-id"):
+                return kedo_client_module.httpx.Response(
+                    200,
+                    json={
+                        "id": "process-id",
+                        "flatDocuments": [
+                            {
+                                "documentKey": 0,
+                                "id": "document-id",
+                                "content": {"name": "test.pdf"},
+                            }
+                        ],
+                        "flatPath": {
+                            "nodes": [
+                                {
+                                    "type": "Sign",
+                                    "signedContents": {
+                                        "0": {
+                                            "signature": {
+                                                "signature": {
+                                                    "createdAt": signed_at,
+                                                    "author": {"employeeId": "employee-id"},
+                                                },
+                                            }
+                                        }
+                                    },
+                                }
+                            ]
+                        },
+                    },
+                )
+            raise AssertionError(f"Unexpected request URL: {url}")
+
+    monkeypatch.setattr(kedo_client_module.httpx, "Client", FakeClient)
+
+    response = get_signed_documents(
+        Settings(_env_file=None, kedo_api_key="api-key", kedo_org_id="org-id"),
+        access_token="token",
+        days=1,
+    )
+
+    assert len(response.signed_documents) == 1
+    assert response.signed_documents[0].process_id == "process-id"
+
+
 def test_build_process_payload_has_sender_and_sign_step() -> None:
     payload = _build_process_payload(
         Settings(_env_file=None),

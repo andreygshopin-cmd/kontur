@@ -6,6 +6,7 @@ import hashlib
 import socket
 import ssl
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import perf_counter, sleep
@@ -29,6 +30,8 @@ DOCUMENT_TYPES_MAX_PAGES = 1
 FILTERED_DOCUMENT_TYPES_PAGE_SIZE = 10
 FILTERED_DOCUMENT_TYPES_MAX_PAGES = 2
 DOCUMENT_TYPES_TIMEOUT = 8.0
+SIGNED_DOCUMENTS_TIMEOUT = 10.0
+SIGNED_DOCUMENT_DETAILS_WORKERS = 8
 
 
 class KedoAuthError(RuntimeError):
@@ -748,7 +751,7 @@ def get_signed_documents(
         "to": _kedo_datetime(to_time),
     }
 
-    with httpx.Client(base_url=_base_url(settings), timeout=120.0) as client:
+    with httpx.Client(base_url=_base_url(settings), timeout=SIGNED_DOCUMENTS_TIMEOUT) as client:
         org_id = settings.kedo_org_id or _get_first_organization(
             client, settings, token, api_key
         ).id
@@ -764,18 +767,13 @@ def get_signed_documents(
         indexed_processes = _paged_result(response.json())
         indexed_processes.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
         process_ids = _process_ids(indexed_processes)
-        processes = [
-            _get_process_details(
-                client,
-                settings,
-                token,
-                api_key,
-                org_id,
-                process_id,
-                flat=True,
-            )
-            for process_id in process_ids
-        ]
+        processes = _get_signed_process_details(
+            settings,
+            token,
+            api_key,
+            org_id,
+            process_ids,
+        )
         signed_documents = [
             signed_document
             for process in processes
@@ -1245,6 +1243,61 @@ def _get_created_process_details(
             )
         )
     return details
+
+
+def _get_signed_process_details(
+    settings: Settings,
+    access_token: str,
+    api_key: str,
+    org_id: str,
+    process_ids: list[str],
+) -> list[dict[str, Any]]:
+    if not process_ids:
+        return []
+
+    max_workers = min(SIGNED_DOCUMENT_DETAILS_WORKERS, len(process_ids))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        return [
+            process
+            for process in executor.map(
+                lambda process_id: _try_get_signed_process_details(
+                    settings,
+                    access_token,
+                    api_key,
+                    org_id,
+                    process_id,
+                ),
+                process_ids,
+            )
+            if process is not None
+        ]
+
+
+def _try_get_signed_process_details(
+    settings: Settings,
+    access_token: str,
+    api_key: str,
+    org_id: str,
+    process_id: str,
+) -> dict[str, Any] | None:
+    try:
+        with httpx.Client(
+            base_url=_base_url(settings),
+            timeout=SIGNED_DOCUMENTS_TIMEOUT,
+        ) as client:
+            return _get_process_details(
+                client,
+                settings,
+                access_token,
+                api_key,
+                org_id,
+                process_id,
+                flat=True,
+            )
+    except KedoApiError as error:
+        if error.status_code == 0:
+            return None
+        raise
 
 
 def _get_process_details(
