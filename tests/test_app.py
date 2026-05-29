@@ -78,6 +78,8 @@ def test_index_has_only_kedo_controls() -> None:
     assert 'id="kedo-file"' in response.text
     assert 'class="debug-panel"' in response.text
     assert 'class="debug-actions"' in response.text
+    assert 'id="open-token-test"' in response.text
+    assert "Тест client_credentials" in response.text
     assert "formatClientDateTime(document.signed_at)" in response.text
     assert 'title="${escapeHtml(document.signed_at)}"' in response.text
     assert "updateDeploymentInfoTime()" in response.text
@@ -86,6 +88,104 @@ def test_index_has_only_kedo_controls() -> None:
     assert "Войти в Контур" not in response.text
     assert "Получить организации" not in response.text
     assert "Получить личные данные" not in response.text
+
+
+def test_kontur_token_test_page() -> None:
+    response = client.get("/kontur-token-test")
+
+    assert response.status_code == 200
+    assert "client_id" in response.text
+    assert "client_secret" in response.text
+    assert "identity.kontur.ru/connect/token" in response.text
+    assert "scope=example.api" in response.text
+    assert "/api/kontur/client-credentials-token" in response.text
+
+
+def test_kontur_client_credentials_token_request(monkeypatch) -> None:
+    class FakeClient:
+        def __init__(self, *, timeout) -> None:
+            assert timeout == 30.0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def post(self, url, **kwargs):
+            assert url == "https://identity.kontur.ru/connect/token"
+            assert kwargs["headers"] == {
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
+            assert kwargs["data"] == {
+                "client_id": "client-id",
+                "client_secret": "client-secret",
+                "scope": "example.api",
+                "grant_type": "client_credentials",
+            }
+            return app_module.httpx.Response(
+                200,
+                json={
+                    "access_token": "access-token",
+                    "token_type": "Bearer",
+                    "expires_in": 3600,
+                },
+            )
+
+    monkeypatch.setattr(app_module.httpx, "Client", FakeClient)
+
+    response = client.post(
+        "/api/kontur/client-credentials-token",
+        json={"client_id": " client-id ", "client_secret": " client-secret "},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["status_code"] == 200
+    assert payload["token_url"] == "https://identity.kontur.ru/connect/token"
+    assert payload["scope"] == "example.api"
+    assert payload["body"]["access_token"] == "access-token"
+
+
+def test_kontur_client_credentials_token_returns_kontur_error_body(monkeypatch) -> None:
+    class FakeClient:
+        def __init__(self, *, timeout) -> None:
+            assert timeout == 30.0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def post(self, url, **kwargs):
+            return app_module.httpx.Response(
+                401,
+                json={"error": "invalid_client"},
+            )
+
+    monkeypatch.setattr(app_module.httpx, "Client", FakeClient)
+
+    response = client.post(
+        "/api/kontur/client-credentials-token",
+        json={"client_id": "client-id", "client_secret": "wrong-secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    assert response.json()["status_code"] == 401
+    assert response.json()["body"] == {"error": "invalid_client"}
+
+
+def test_kontur_client_credentials_token_requires_fields() -> None:
+    response = client.post(
+        "/api/kontur/client-credentials-token",
+        json={"client_id": "", "client_secret": " "},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "client_id and client_secret are required."
 
 
 def test_deployment_info_uses_deploy_environment(monkeypatch) -> None:

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from html import escape
 from pathlib import PurePosixPath, PureWindowsPath
+from typing import Any, cast
 from urllib.parse import quote
 
 import httpx
@@ -46,7 +47,11 @@ DEFAULT_KEDO_DOCUMENT_TYPE_ID = "00000000-0000-0000-0000-000000000001"
 DEFAULT_KEDO_TEST_FILENAME = "document.pdf"
 INVALID_FILENAME_CHARS = set('<>:"/\\|?*')
 DEFAULT_KEDO_FILE_EXTENSION = "pdf"
+KONTUR_IDENTITY_TOKEN_URL = "https://identity.kontur.ru/connect/token"
+KONTUR_CLIENT_CREDENTIALS_SCOPE = "example.api"
 APP_STARTED_AT = datetime.now(UTC)
+
+TokenTestBody = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 
 class HealthResponse(BaseModel):
@@ -68,6 +73,21 @@ class KedoTestDocumentRequest(BaseModel):
     due_days: int | None = None
     file_name: str | None = None
     file_content_base64: str | None = None
+
+
+class KonturClientCredentialsRequest(BaseModel):
+    client_id: str
+    client_secret: str
+
+
+class KonturClientCredentialsResponse(BaseModel):
+    token_url: str
+    scope: str
+    grant_type: str
+    ok: bool
+    status_code: int
+    content_type: str | None = None
+    body: TokenTestBody = None
 
 
 @lru_cache
@@ -174,6 +194,13 @@ def index() -> str:
         </button>
         <button id="load-kedo-employees" class="secondary">Получить сотрудников</button>
         <button id="load-kedo-signature-types" class="secondary">Получить типы подписи</button>
+        <button
+          id="open-token-test"
+          class="secondary"
+          onclick="window.location.href='/kontur-token-test'"
+        >
+          Тест client_credentials
+        </button>
       </div>
     </header>
     <div class="kedo-form">
@@ -762,6 +789,121 @@ def index() -> str:
 """.replace("__DEPLOY_INFO_HTML__", _deployment_info_html(deployment_info))
 
 
+@app.get("/kontur-token-test", response_class=HTMLResponse)
+def kontur_token_test_page() -> str:
+    return f"""
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kontur client_credentials test</title>
+  <style>
+    :root {{ color-scheme: light; font-family: Arial, sans-serif; }}
+    body {{ margin: 0; background: #f6f7f9; color: #1f2933; }}
+    main {{ max-width: 760px; margin: 0 auto; padding: 40px 20px; }}
+    header {{ display: flex; justify-content: space-between; gap: 16px; align-items: center; }}
+    h1 {{ margin: 0; font-size: 28px; line-height: 1.2; }}
+    a {{ color: #2563eb; text-decoration: none; }}
+    form {{ margin-top: 24px; display: grid; gap: 12px; }}
+    label {{ color: #52606d; font-size: 14px; font-weight: 700; }}
+    input {{
+      width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1;
+      border-radius: 6px; padding: 11px 12px; font-size: 15px;
+      color: #1f2933; background: white;
+    }}
+    button {{
+      justify-self: start; border: 0; border-radius: 6px; background: #0f766e;
+      color: white; padding: 12px 18px; font-size: 16px; cursor: pointer;
+    }}
+    button:disabled {{ opacity: .65; cursor: progress; }}
+    .panel {{ margin-top: 28px; background: white; border: 1px solid #d9dee7; border-radius: 8px; }}
+    .status {{ padding: 16px 18px; border-bottom: 1px solid #e5e9f0; font-weight: 700; }}
+    .content {{ padding: 18px; }}
+    .muted {{ color: #667085; }}
+    .error {{ color: #b42318; }}
+    .ok {{ color: #027a48; }}
+    .json-block {{
+      margin: 0; max-height: 520px; overflow: auto; white-space: pre-wrap;
+      background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px;
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Тест OAuth client_credentials</h1>
+      <a href="/">На главную</a>
+    </header>
+    <form id="token-form">
+      <label for="client-id">client_id</label>
+      <input id="client-id" name="client_id" type="text" autocomplete="off" required>
+
+      <label for="client-secret">client_secret</label>
+      <input id="client-secret" name="client_secret" type="text" autocomplete="off" required>
+
+      <button id="request-token" type="submit">Вызвать /connect/token</button>
+    </form>
+    <section class="panel">
+      <div id="status" class="status muted">Готово к проверке.</div>
+      <div class="content">
+        <pre id="result" class="json-block"><code>POST {escape(KONTUR_IDENTITY_TOKEN_URL)}
+Content-Type: application/x-www-form-urlencoded
+
+client_id=...
+client_secret=...
+scope={escape(KONTUR_CLIENT_CREDENTIALS_SCOPE)}
+grant_type=client_credentials</code></pre>
+      </div>
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById("token-form");
+    const button = document.getElementById("request-token");
+    const statusNode = document.getElementById("status");
+    const resultNode = document.getElementById("result");
+
+    function formatErrorDetail(detail) {{
+      if (!detail) return "Unknown error";
+      if (typeof detail === "string") return detail;
+      return JSON.stringify(detail, null, 2);
+    }}
+
+    form.addEventListener("submit", async (event) => {{
+      event.preventDefault();
+      button.disabled = true;
+      statusNode.className = "status muted";
+      statusNode.textContent = "Запрос в identity.kontur.ru...";
+      resultNode.textContent = "";
+
+      try {{
+        const response = await fetch("/api/kontur/client-credentials-token", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{
+            client_id: document.getElementById("client-id").value.trim(),
+            client_secret: document.getElementById("client-secret").value.trim()
+          }})
+        }});
+        const data = await response.json();
+        if (!response.ok) throw new Error(formatErrorDetail(data.detail));
+        statusNode.className = data.ok ? "status ok" : "status error";
+        statusNode.textContent = `HTTP Контур: ${{data.status_code}}`;
+        resultNode.textContent = JSON.stringify(data, null, 2);
+      }} catch (error) {{
+        statusNode.className = "status error";
+        statusNode.textContent = "Ошибка";
+        resultNode.textContent = error.message;
+      }} finally {{
+        button.disabled = false;
+      }}
+    }});
+  </script>
+</body>
+</html>
+"""
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
@@ -770,6 +912,31 @@ def health() -> HealthResponse:
 @app.get("/api/deployment", response_model=DeploymentInfoResponse)
 def deployment_info() -> DeploymentInfoResponse:
     return _deployment_info()
+
+
+@app.post("/api/kontur/client-credentials-token", response_model=KonturClientCredentialsResponse)
+def kontur_client_credentials_token(
+    payload: KonturClientCredentialsRequest,
+) -> KonturClientCredentialsResponse:
+    client_id = _non_empty(payload.client_id)
+    client_secret = _non_empty(payload.client_secret)
+    if not client_id or not client_secret:
+        raise HTTPException(status_code=400, detail="client_id and client_secret are required.")
+
+    try:
+        response = _request_client_credentials_token(client_id, client_secret)
+    except httpx.HTTPError as error:
+        raise _to_network_http_exception("Kontur Identity Token", error) from error
+
+    return KonturClientCredentialsResponse(
+        token_url=KONTUR_IDENTITY_TOKEN_URL,
+        scope=KONTUR_CLIENT_CREDENTIALS_SCOPE,
+        grant_type="client_credentials",
+        ok=response.is_success,
+        status_code=response.status_code,
+        content_type=response.headers.get("content-type"),
+        body=_read_token_test_body(response),
+    )
 
 
 @app.post("/api/kedo/test-document", response_model=KedoTestDocumentResponse)
@@ -990,6 +1157,30 @@ def _format_deployment_iso(value: datetime) -> str:
 
 def _format_deployment_display(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _request_client_credentials_token(client_id: str, client_secret: str) -> httpx.Response:
+    with httpx.Client(timeout=30.0) as client:
+        return client.post(
+            KONTUR_IDENTITY_TOKEN_URL,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "scope": KONTUR_CLIENT_CREDENTIALS_SCOPE,
+                "grant_type": "client_credentials",
+            },
+        )
+
+
+def _read_token_test_body(response: httpx.Response) -> TokenTestBody:
+    content_type = response.headers.get("content-type", "").casefold()
+    if "json" in content_type:
+        try:
+            return cast(TokenTestBody, response.json())
+        except ValueError:
+            pass
+    return response.text
 
 
 def _non_empty_or(value: str | None, default: str) -> str:
